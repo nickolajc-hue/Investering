@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [holdings, setHoldings] = useState(null);
   const [prices, setPrices] = useState({});
   const [loading, setLoading] = useState(false);
+  const [priceError, setPriceError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ symbol: '', shares: '', avgBuyPrice: '' });
@@ -54,13 +55,19 @@ export default function Dashboard() {
     }
     const symbols = [...new Set(list.map((h) => h.symbol))];
     setLoading(true);
+    setPriceError(null);
     try {
       const res = await fetch(`/api/prices?symbols=${symbols.join(',')}`);
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.failed?.length > 0) {
+        setPriceError(`Kunne ikke hente kurs for: ${data.failed.join(', ')} — tjek at symbolet er korrekt.`);
+      }
       setPrices(data.prices || {});
       setLastUpdated(new Date());
-    } catch {}
-    finally {
+    } catch (err) {
+      setPriceError(`Kunne ikke hente kurser: ${err.message}`);
+    } finally {
       setLoading(false);
     }
   }, []);
@@ -128,6 +135,16 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+      {/* Price error banner */}
+      {priceError && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl text-sm flex items-start gap-2">
+          <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+          </svg>
+          <span>{priceError}</span>
+        </div>
+      )}
+
       {/* Summary cards */}
       {holdings && holdings.length > 0 && Object.keys(summary).length > 0 && (
         <div className="space-y-3">
