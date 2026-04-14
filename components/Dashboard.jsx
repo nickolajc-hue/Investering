@@ -30,7 +30,7 @@ export default function Dashboard() {
   const [holdings, setHoldings] = useState(null);
   const [prices, setPrices] = useState({});
   const [dkkRates, setDkkRates] = useState({ DKK: 1 });
-  const [showDKK, setShowDKK] = useState(false);
+  const [showDKK, setShowDKK] = useState(true);
   const [loading, setLoading] = useState(false);
   const [priceError, setPriceError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -38,12 +38,13 @@ export default function Dashboard() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     type: 'stock',
-    // stock / crypto fields
     symbol: '', shares: '', avgBuyPrice: '',
-    // crowdlending fields
-    name: '', invested: '', monthlyReturn: '', currency: 'DKK', startDate: '',
+    name: '', invested: '', currency: 'DKK', startDate: '',
   });
   const [formError, setFormError] = useState('');
+  // { clId, amount, date } — open payment form for a crowdlending row
+  const [paymentForm, setPaymentForm] = useState(null);
+  const [paymentError, setPaymentError] = useState('');
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-beholdninger');
@@ -106,10 +107,8 @@ export default function Dashboard() {
     if (form.type === 'crowdlending') {
       const name = form.name.trim();
       const invested = parseFloat(form.invested.replace(',', '.'));
-      const monthlyReturn = parseFloat(form.monthlyReturn.replace(',', '.'));
       if (!name) return setFormError('Angiv et platformsnavn');
       if (!invested || invested <= 0) return setFormError('Investeret beløb skal være større end 0');
-      if (isNaN(monthlyReturn) || monthlyReturn < 0) return setFormError('Månedlig rente skal være 0 eller mere');
       setHoldings((prev) => [
         ...prev,
         {
@@ -117,9 +116,9 @@ export default function Dashboard() {
           type: 'crowdlending',
           name,
           invested,
-          monthlyReturn,
           currency: form.currency,
           startDate: form.startDate || new Date().toISOString().split('T')[0],
+          payments: [],
         },
       ]);
     } else {
@@ -138,13 +137,35 @@ export default function Dashboard() {
     setForm((f) => ({
       type: f.type,
       symbol: '', shares: '', avgBuyPrice: '',
-      name: '', invested: '', monthlyReturn: '', currency: 'DKK', startDate: '',
+      name: '', invested: '', currency: 'DKK', startDate: '',
     }));
     setFormError('');
     setShowForm(false);
   };
 
   const removeHolding = (id) => setHoldings((prev) => prev.filter((h) => h.id !== id));
+
+  const openPaymentForm = (clId) => {
+    const today = new Date().toISOString().split('T')[0];
+    setPaymentForm({ clId, amount: '', date: today });
+    setPaymentError('');
+  };
+
+  const savePayment = (e) => {
+    e.preventDefault();
+    const amount = parseFloat(paymentForm.amount.replace(',', '.'));
+    if (!amount || amount <= 0) return setPaymentError('Beløb skal være større end 0');
+    if (!paymentForm.date) return setPaymentError('Vælg en dato');
+    setHoldings((prev) =>
+      prev.map((h) =>
+        h.id === paymentForm.clId
+          ? { ...h, payments: [...(h.payments || []), { date: paymentForm.date, amount }] }
+          : h
+      )
+    );
+    setPaymentForm(null);
+    setPaymentError('');
+  };
 
   // Enrich each holding with live price data (+ DKK equivalents)
   const enriched = (holdings || []).map((h) => {
@@ -185,24 +206,24 @@ export default function Dashboard() {
     ? h.currentPrice * h.dkkRate
     : h.currentPrice;
 
-  // Crowdlending computed rows
+  // Crowdlending computed rows — interest = sum of all registered payments
   const crowdlendingRows = (holdings || [])
     .filter((h) => h.type === 'crowdlending')
     .map((h) => {
-      const startTs = new Date(h.startDate || '2020-01-01').getTime();
-      const months = Math.max(0, (Date.now() - startTs) / (30.44 * 86400 * 1000));
-      const interest = h.monthlyReturn * months;
+      const payments = h.payments || [];
+      const interest = payments.reduce((s, p) => s + p.amount, 0);
       const currentValue = h.invested + interest;
       const returnPct = h.invested > 0 ? (interest / h.invested) * 100 : 0;
       const rate = dkkRates[h.currency] ?? 1;
-      return { ...h, months, interest, currentValue, returnPct, rate };
+      return { ...h, payments, interest, currentValue, returnPct, rate };
     });
 
-  // Filter by asset type
+  // Filter by asset type — crowdlending is always excluded from the stock/crypto table
   const filteredEnriched = enriched.filter((h) => {
+    if (h.type === 'crowdlending') return false;
     if (assetFilter === 'crypto') return h.type === 'crypto';
     if (assetFilter === 'stock') return h.type === 'stock' || !h.type;
-    return true; // 'all' shows stocks + crypto (crowdlending has its own section)
+    return true; // 'all'
   });
   const filteredCrowdlending = assetFilter === 'crowdlending' || assetFilter === 'all'
     ? crowdlendingRows
@@ -292,44 +313,20 @@ export default function Dashboard() {
       {/* Holdings card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {/* Card header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-gray-900">
-              Beholdninger{holdings?.length ? ` (${holdings.length})` : ''}
-            </h2>
-            {lastUpdated && (
-              <span className="text-xs text-gray-400 tabular-nums">
-                {lastUpdated.toLocaleTimeString('da-DK', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </span>
-            )}
-            {/* Asset type filter tabs */}
-            {holdings?.length > 0 && (
-              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5">
-                {[
-                  { label: 'Alle', value: 'all' },
-                  { label: 'Aktier', value: 'stock' },
-                  { label: 'Krypto', value: 'crypto' },
-                  { label: 'Crowdlending', value: 'crowdlending' },
-                ].map((tab) => (
-                  <button
-                    key={tab.value}
-                    onClick={() => setAssetFilter(tab.value)}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
-                      assetFilter === tab.value
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
+        <div className="px-5 py-3 border-b border-gray-100">
+          {/* Row 1: title + action buttons */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-gray-900">
+                Beholdninger{holdings?.length ? ` (${holdings.length})` : ''}
+              </h2>
+              {lastUpdated && (
+                <span className="text-xs text-gray-400 tabular-nums">
+                  {lastUpdated.toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+          <div className="flex items-center gap-2">
             <button
               onClick={() => fetchPrices(holdings)}
               disabled={loading || !holdings?.length}
@@ -367,6 +364,30 @@ export default function Dashboard() {
               Tilføj {form.type === 'crypto' ? 'krypto' : form.type === 'crowdlending' ? 'crowdlending' : 'aktie'}
             </button>
           </div>
+          </div>{/* end row 1 */}
+          {/* Row 2: filter tabs */}
+          {holdings?.length > 0 && (
+            <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 mt-2 w-fit">
+              {[
+                { label: 'Alle', value: 'all' },
+                { label: 'Aktier', value: 'stock' },
+                { label: 'Krypto', value: 'crypto' },
+                { label: 'Crowdlending', value: 'crowdlending' },
+              ].map((tab) => (
+                <button
+                  key={tab.value}
+                  onClick={() => setAssetFilter(tab.value)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                    assetFilter === tab.value
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Add form */}
@@ -423,18 +444,6 @@ export default function Dashboard() {
                       step="any"
                       onChange={(e) => setForm((f) => ({ ...f, invested: e.target.value }))}
                       className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-gray-600">Rente/md.</label>
-                    <input
-                      type="number"
-                      placeholder="400"
-                      value={form.monthlyReturn}
-                      min="0"
-                      step="any"
-                      onChange={(e) => setForm((f) => ({ ...f, monthlyReturn: e.target.value }))}
-                      className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
@@ -522,7 +531,7 @@ export default function Dashboard() {
             {formError && <p className="text-xs text-red-600 mt-2">{formError}</p>}
             <p className="text-xs text-gray-400 mt-2">
               {form.type === 'crowdlending'
-                ? 'Rente pr. måned i den valgte valuta'
+                ? 'Tilføj renteudbetalinger direkte på platformen efterfølgende'
                 : form.type === 'crypto'
                 ? 'Krypto eksempel: BTC-USD · ETH-USD · SOL-USD'
                 : 'Aktie eksempel: AAPL · NOVO-B.CO · TSLA'}
@@ -740,7 +749,7 @@ export default function Dashboard() {
       </div>
 
       {/* Crowdlending section */}
-      {filteredCrowdlending.length > 0 && (
+      {(filteredCrowdlending.length > 0 || (assetFilter === 'crowdlending' && crowdlendingRows.length === 0)) && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -748,105 +757,179 @@ export default function Dashboard() {
             </h3>
           </div>
 
+          {filteredCrowdlending.length === 0 && (
+            <div className="text-center py-10 text-gray-400 text-sm">
+              Ingen crowdlending-platforme endnu — tryk <span className="font-semibold">Tilføj crowdlending</span>
+            </div>
+          )}
+
           {/* Desktop */}
-          <div className="hidden sm:block overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  <th className="px-5 py-3 text-left">Platform</th>
-                  <th className="px-3 py-3 text-right">Investeret</th>
-                  <th className="px-3 py-3 text-right">Rente/md.</th>
-                  <th className="px-3 py-3 text-right">Startdato</th>
-                  <th className="px-3 py-3 text-right">Renteindtægt</th>
-                  <th className="px-3 py-3 text-right">Nuværende værdi</th>
-                  <th className="px-3 py-3 text-right">Afkast %</th>
-                  <th className="w-12" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredCrowdlending.map((cl) => {
-                  const c = showDKK ? 'DKK' : cl.currency;
-                  const m = showDKK ? cl.rate : 1;
-                  return (
-                    <tr key={cl.id} className="hover:bg-gray-50 group transition-colors">
-                      <td className="px-5 py-3.5">
-                        <div className="font-bold text-gray-900">{cl.name}</div>
-                        <div className="text-xs text-gray-400">{cl.currency}</div>
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
-                        {fmt(cl.invested * m, c)}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums text-gray-500">
-                        {fmt(cl.monthlyReturn * m, c)}/md.
-                      </td>
-                      <td className="px-3 py-3.5 text-right text-xs text-gray-400">
-                        {new Date(cl.startDate).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' })}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums font-medium text-green-600">
-                        +{fmt(cl.interest * m, c)}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums font-bold text-gray-900">
-                        {fmt(cl.currentValue * m, c)}
-                      </td>
-                      <td className={`px-3 py-3.5 text-right tabular-nums font-bold ${gainColor(cl.returnPct)}`}>
-                        {fmtPct(cl.returnPct)}
-                      </td>
-                      <td className="px-3 py-3.5">
+          {filteredCrowdlending.length > 0 && (
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    <th className="px-5 py-3 text-left">Platform</th>
+                    <th className="px-3 py-3 text-right">Investeret</th>
+                    <th className="px-3 py-3 text-right">Udbetalinger</th>
+                    <th className="px-3 py-3 text-right">Renteindtægt</th>
+                    <th className="px-3 py-3 text-right">Nuværende værdi</th>
+                    <th className="px-3 py-3 text-right">Afkast %</th>
+                    <th className="px-3 py-3 text-right" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredCrowdlending.map((cl) => {
+                    const c = showDKK ? 'DKK' : cl.currency;
+                    const m = showDKK ? cl.rate : 1;
+                    const isOpen = paymentForm?.clId === cl.id;
+                    return (
+                      <>
+                        <tr key={cl.id} className="hover:bg-gray-50 group transition-colors">
+                          <td className="px-5 py-3.5">
+                            <div className="font-bold text-gray-900">{cl.name}</div>
+                            <div className="text-xs text-gray-400">{cl.currency}</div>
+                          </td>
+                          <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
+                            {fmt(cl.invested * m, c)}
+                          </td>
+                          <td className="px-3 py-3.5 text-right tabular-nums text-gray-500">
+                            {cl.payments.length} udbetaling{cl.payments.length !== 1 ? 'er' : ''}
+                          </td>
+                          <td className="px-3 py-3.5 text-right tabular-nums font-medium text-green-600">
+                            +{fmt(cl.interest * m, c)}
+                          </td>
+                          <td className="px-3 py-3.5 text-right tabular-nums font-bold text-gray-900">
+                            {fmt(cl.currentValue * m, c)}
+                          </td>
+                          <td className={`px-3 py-3.5 text-right tabular-nums font-bold ${gainColor(cl.returnPct)}`}>
+                            {fmtPct(cl.returnPct)}
+                          </td>
+                          <td className="px-3 py-3.5">
+                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                              <button
+                                onClick={() => isOpen ? setPaymentForm(null) : openPaymentForm(cl.id)}
+                                className="px-2 py-1 rounded-md bg-green-50 text-green-700 hover:bg-green-100 text-xs font-semibold whitespace-nowrap"
+                              >
+                                + Rente
+                              </button>
+                              <button
+                                onClick={() => removeHolding(cl.id)}
+                                aria-label={`Fjern ${cl.name}`}
+                                className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                        {isOpen && (
+                          <tr key={`${cl.id}-payment`}>
+                            <td colSpan={7} className="px-5 py-3 bg-green-50 border-b border-green-100">
+                              <form onSubmit={savePayment} className="flex flex-wrap gap-2 items-end">
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-xs font-medium text-gray-600">Dato</label>
+                                  <input
+                                    type="date"
+                                    value={paymentForm.date}
+                                    onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
+                                    className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                                  />
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-xs font-medium text-gray-600">
+                                    Rente udbetalt ({cl.currency})
+                                  </label>
+                                  <input
+                                    type="number"
+                                    placeholder="450"
+                                    value={paymentForm.amount}
+                                    min="0"
+                                    step="any"
+                                    autoFocus
+                                    onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
+                                    className="w-28 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                                  />
+                                </div>
+                                <button type="submit" className="px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">
+                                  Gem
+                                </button>
+                                <button type="button" onClick={() => { setPaymentForm(null); setPaymentError(''); }} className="px-3 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
+                                  Annuller
+                                </button>
+                                {paymentError && <p className="w-full text-xs text-red-600 mt-1">{paymentError}</p>}
+                              </form>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Mobile */}
+          {filteredCrowdlending.length > 0 && (
+            <div className="sm:hidden divide-y divide-gray-100">
+              {filteredCrowdlending.map((cl) => {
+                const c = showDKK ? 'DKK' : cl.currency;
+                const m = showDKK ? cl.rate : 1;
+                const isOpen = paymentForm?.clId === cl.id;
+                return (
+                  <div key={cl.id} className="px-4 py-4">
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <span className="font-bold text-base text-gray-900">{cl.name}</span>
+                        <span className="text-xs text-gray-400 ml-2">{cl.currency}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() => removeHolding(cl.id)}
-                          aria-label={`Fjern ${cl.name}`}
-                          className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
+                          onClick={() => isOpen ? setPaymentForm(null) : openPaymentForm(cl.id)}
+                          className="px-2 py-1 rounded-md bg-green-50 text-green-700 text-xs font-semibold"
                         >
+                          + Rente
+                        </button>
+                        <button onClick={() => removeHolding(cl.id)} className="p-1 text-gray-300 hover:text-red-400 transition-colors">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
                         </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mobile */}
-          <div className="sm:hidden divide-y divide-gray-100">
-            {filteredCrowdlending.map((cl) => {
-              const c = showDKK ? 'DKK' : cl.currency;
-              const m = showDKK ? cl.rate : 1;
-              return (
-                <div key={cl.id} className="px-4 py-4">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <span className="font-bold text-base text-gray-900">{cl.name}</span>
-                      <span className="text-xs text-gray-400 ml-2">{cl.currency}</span>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => removeHolding(cl.id)}
-                      aria-label={`Fjern ${cl.name}`}
-                      className="p-1 text-gray-300 hover:text-red-400 transition-colors"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
+                    {isOpen && (
+                      <form onSubmit={savePayment} className="flex gap-2 items-end mb-3 p-3 bg-green-50 rounded-lg">
+                        <div className="flex flex-col gap-1 flex-1">
+                          <label className="text-xs font-medium text-gray-600">Dato</label>
+                          <input type="date" value={paymentForm.date} onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
+                        </div>
+                        <div className="flex flex-col gap-1 flex-1">
+                          <label className="text-xs font-medium text-gray-600">Beløb ({cl.currency})</label>
+                          <input type="number" placeholder="450" value={paymentForm.amount} min="0" step="any" autoFocus onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
+                        </div>
+                        <button type="submit" className="px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg">Gem</button>
+                      </form>
+                    )}
+                    <div className="grid grid-cols-2 gap-y-2 text-sm">
+                      <span className="text-gray-500">Investeret</span>
+                      <span className="text-right font-medium text-gray-900">{fmt(cl.invested * m, c)}</span>
+                      <span className="text-gray-500">Udbetalinger</span>
+                      <span className="text-right text-gray-600">{cl.payments.length} stk.</span>
+                      <span className="text-gray-500">Renteindtægt</span>
+                      <span className="text-right font-bold text-green-600">+{fmt(cl.interest * m, c)}</span>
+                      <span className="text-gray-500">Nuværende værdi</span>
+                      <span className="text-right font-bold text-gray-900">{fmt(cl.currentValue * m, c)}</span>
+                      <span className="text-gray-500">Afkast %</span>
+                      <span className={`text-right font-bold ${gainColor(cl.returnPct)}`}>{fmtPct(cl.returnPct)}</span>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-y-2 text-sm">
-                    <span className="text-gray-500">Investeret</span>
-                    <span className="text-right font-medium text-gray-900">{fmt(cl.invested * m, c)}</span>
-                    <span className="text-gray-500">Rente/md.</span>
-                    <span className="text-right font-medium text-gray-900">{fmt(cl.monthlyReturn * m, c)}</span>
-                    <span className="text-gray-500">Renteindtægt</span>
-                    <span className="text-right font-bold text-green-600">+{fmt(cl.interest * m, c)}</span>
-                    <span className="text-gray-500">Nuværende værdi</span>
-                    <span className="text-right font-bold text-gray-900">{fmt(cl.currentValue * m, c)}</span>
-                    <span className="text-gray-500">Afkast %</span>
-                    <span className={`text-right font-bold ${gainColor(cl.returnPct)}`}>{fmtPct(cl.returnPct)}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

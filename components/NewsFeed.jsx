@@ -26,12 +26,13 @@ function formatDate(isoDate) {
   return date.toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function NewsCard({ item, color, isNew }) {
+function NewsCard({ item, color, isNew, onRead }) {
   return (
     <a
       href={item.link}
       target="_blank"
       rel="noopener noreferrer"
+      onClick={() => onRead(item.link)}
       className={`group flex flex-col bg-white rounded-xl border p-5 hover:shadow-md transition-all duration-200 ${
         isNew ? 'border-blue-300 hover:border-blue-400' : 'border-gray-200 hover:border-gray-300'
       }`}
@@ -92,6 +93,7 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [activeFilter, setActiveFilter] = useState('all');
   const [error, setError] = useState(null);
+  const [readLinks, setReadLinks] = useState(new Set());
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-nyheder');
@@ -100,6 +102,20 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
     } catch {
       setSymbols(['AAPL', 'MSFT', 'NVDA']);
     }
+    const savedRead = localStorage.getItem('news-read-links');
+    if (savedRead) {
+      try { setReadLinks(new Set(JSON.parse(savedRead))); } catch {}
+    }
+  }, []);
+
+  const markRead = useCallback((link) => {
+    setReadLinks((prev) => {
+      const next = new Set(prev);
+      next.add(link);
+      const arr = [...next].slice(-500); // keep max 500 entries
+      localStorage.setItem('news-read-links', JSON.stringify(arr));
+      return new Set(arr);
+    });
   }, []);
 
   useEffect(() => {
@@ -335,7 +351,11 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
               key={`${item.symbol}-${index}`}
               item={item}
               color={getColor(item.symbol)}
-              isNew={lastNewsCheck === 0 || new Date(item.pubDate).getTime() > lastNewsCheck}
+              isNew={
+                !readLinks.has(item.link) &&
+                (lastNewsCheck === 0 || new Date(item.pubDate).getTime() > lastNewsCheck)
+              }
+              onRead={markRead}
             />
           ))}
         </div>
