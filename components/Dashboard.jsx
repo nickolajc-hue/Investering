@@ -33,7 +33,13 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [assetFilter, setAssetFilter] = useState('all'); // 'all' | 'stock' | 'crypto'
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ symbol: '', shares: '', avgBuyPrice: '', type: 'stock' });
+  const [form, setForm] = useState({
+    type: 'stock',
+    // stock / crypto fields
+    symbol: '', shares: '', avgBuyPrice: '',
+    // crowdlending fields
+    name: '', invested: '', monthlyReturn: '', currency: 'DKK', startDate: '',
+  });
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
@@ -56,7 +62,7 @@ export default function Dashboard() {
       setPrices({});
       return;
     }
-    const symbols = [...new Set(list.map((h) => h.symbol))];
+    const symbols = [...new Set(list.filter((h) => h.symbol).map((h) => h.symbol))];
     setLoading(true);
     setPriceError(null);
     try {
@@ -93,19 +99,44 @@ export default function Dashboard() {
 
   const addHolding = (e) => {
     e.preventDefault();
-    const symbol = form.symbol.trim().toUpperCase();
-    const shares = parseFloat(form.shares.replace(',', '.'));
-    const avgBuyPrice = parseFloat(form.avgBuyPrice.replace(',', '.'));
 
-    if (!symbol) return setFormError('Angiv et aktiesymbol');
-    if (!shares || shares <= 0) return setFormError('Antal skal være større end 0');
-    if (!avgBuyPrice || avgBuyPrice <= 0) return setFormError('Gns. kurs skal være større end 0');
+    if (form.type === 'crowdlending') {
+      const name = form.name.trim();
+      const invested = parseFloat(form.invested.replace(',', '.'));
+      const monthlyReturn = parseFloat(form.monthlyReturn.replace(',', '.'));
+      if (!name) return setFormError('Angiv et platformsnavn');
+      if (!invested || invested <= 0) return setFormError('Investeret beløb skal være større end 0');
+      if (isNaN(monthlyReturn) || monthlyReturn < 0) return setFormError('Månedlig rente skal være 0 eller mere');
+      setHoldings((prev) => [
+        ...prev,
+        {
+          id: `CL-${Date.now()}`,
+          type: 'crowdlending',
+          name,
+          invested,
+          monthlyReturn,
+          currency: form.currency,
+          startDate: form.startDate || new Date().toISOString().split('T')[0],
+        },
+      ]);
+    } else {
+      const symbol = form.symbol.trim().toUpperCase();
+      const shares = parseFloat(form.shares.replace(',', '.'));
+      const avgBuyPrice = parseFloat(form.avgBuyPrice.replace(',', '.'));
+      if (!symbol) return setFormError('Angiv et symbol');
+      if (!shares || shares <= 0) return setFormError('Antal skal være større end 0');
+      if (!avgBuyPrice || avgBuyPrice <= 0) return setFormError('Gns. kurs skal være større end 0');
+      setHoldings((prev) => [
+        ...prev,
+        { id: `${symbol}-${Date.now()}`, symbol, shares, avgBuyPrice, type: form.type },
+      ]);
+    }
 
-    setHoldings((prev) => [
-      ...prev,
-      { id: `${symbol}-${Date.now()}`, symbol, shares, avgBuyPrice, type: form.type },
-    ]);
-    setForm({ symbol: '', shares: '', avgBuyPrice: '', type: form.type });
+    setForm((f) => ({
+      type: f.type,
+      symbol: '', shares: '', avgBuyPrice: '',
+      name: '', invested: '', monthlyReturn: '', currency: 'DKK', startDate: '',
+    }));
     setFormError('');
     setShowForm(false);
   };
@@ -151,15 +182,30 @@ export default function Dashboard() {
     ? h.currentPrice * h.dkkRate
     : h.currentPrice;
 
-  // Filter by asset type
-  const filteredEnriched = assetFilter === 'all'
-    ? enriched
-    : enriched.filter((h) => {
-        if (assetFilter === 'crypto') return h.type === 'crypto';
-        return h.type === 'stock' || !h.type;
-      });
+  // Crowdlending computed rows
+  const crowdlendingRows = (holdings || [])
+    .filter((h) => h.type === 'crowdlending')
+    .map((h) => {
+      const startTs = new Date(h.startDate || '2020-01-01').getTime();
+      const months = Math.max(0, (Date.now() - startTs) / (30.44 * 86400 * 1000));
+      const interest = h.monthlyReturn * months;
+      const currentValue = h.invested + interest;
+      const returnPct = h.invested > 0 ? (interest / h.invested) * 100 : 0;
+      const rate = dkkRates[h.currency] ?? 1;
+      return { ...h, months, interest, currentValue, returnPct, rate };
+    });
 
-  // Summary
+  // Filter by asset type
+  const filteredEnriched = enriched.filter((h) => {
+    if (assetFilter === 'crypto') return h.type === 'crypto';
+    if (assetFilter === 'stock') return h.type === 'stock' || !h.type;
+    return true; // 'all' shows stocks + crypto (crowdlending has its own section)
+  });
+  const filteredCrowdlending = assetFilter === 'crowdlending' || assetFilter === 'all'
+    ? crowdlendingRows
+    : [];
+
+  // Summary (stocks + crypto + crowdlending)
   const summary = {};
   for (const h of enriched) {
     if (val(h) === null) continue;
@@ -167,6 +213,13 @@ export default function Dashboard() {
     if (!summary[c]) summary[c] = { value: 0, invested: 0 };
     summary[c].value    += val(h);
     summary[c].invested += inv(h);
+  }
+  for (const cl of crowdlendingRows) {
+    const c = showDKK ? 'DKK' : cl.currency;
+    const mult = showDKK ? cl.rate : 1;
+    if (!summary[c]) summary[c] = { value: 0, invested: 0 };
+    summary[c].value    += cl.currentValue * mult;
+    summary[c].invested += cl.invested     * mult;
   }
 
   return (
@@ -253,6 +306,7 @@ export default function Dashboard() {
                   { label: 'Alle', value: 'all' },
                   { label: 'Aktier', value: 'stock' },
                   { label: 'Krypto', value: 'crypto' },
+                  { label: 'Crowdlending', value: 'crowdlending' },
                 ].map((tab) => (
                   <button
                     key={tab.value}
@@ -304,7 +358,7 @@ export default function Dashboard() {
                   d="M12 4v16m8-8H4"
                 />
               </svg>
-              Tilføj {form.type === 'crypto' ? 'krypto' : 'aktie'}
+              Tilføj {form.type === 'crypto' ? 'krypto' : form.type === 'crowdlending' ? 'crowdlending' : 'aktie'}
             </button>
           </div>
         </div>
@@ -323,6 +377,7 @@ export default function Dashboard() {
                   {[
                     { label: 'Aktie', value: 'stock' },
                     { label: 'Krypto', value: 'crypto' },
+                    { label: 'Crowdlending', value: 'crowdlending' },
                   ].map((t) => (
                     <button
                       key={t.value}
@@ -339,47 +394,108 @@ export default function Dashboard() {
                   ))}
                 </div>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-gray-600">Symbol</label>
-                <input
-                  type="text"
-                  placeholder="AAPL"
-                  value={form.symbol}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))
-                  }
-                  maxLength={20}
-                  className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-gray-600">Antal</label>
-                <input
-                  type="number"
-                  placeholder="10"
-                  value={form.shares}
-                  min="0"
-                  step="any"
-                  onChange={(e) => setForm((f) => ({ ...f, shares: e.target.value }))}
-                  className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-gray-600">
-                  Gns. købskurs
-                </label>
-                <input
-                  type="number"
-                  placeholder="150.00"
-                  value={form.avgBuyPrice}
-                  min="0"
-                  step="any"
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, avgBuyPrice: e.target.value }))
-                  }
-                  className="w-32 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                />
-              </div>
+              {form.type === 'crowdlending' ? (
+                <>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Platform</label>
+                    <input
+                      type="text"
+                      placeholder="Bondora"
+                      value={form.name}
+                      onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                      maxLength={40}
+                      className="w-32 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Investeret</label>
+                    <input
+                      type="number"
+                      placeholder="50000"
+                      value={form.invested}
+                      min="0"
+                      step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, invested: e.target.value }))}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Rente/md.</label>
+                    <input
+                      type="number"
+                      placeholder="400"
+                      value={form.monthlyReturn}
+                      min="0"
+                      step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, monthlyReturn: e.target.value }))}
+                      className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Valuta</label>
+                    <select
+                      value={form.currency}
+                      onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}
+                      className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    >
+                      {['DKK', 'EUR', 'USD', 'GBP', 'SEK', 'NOK'].map((c) => (
+                        <option key={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Startdato</label>
+                    <input
+                      type="date"
+                      value={form.startDate}
+                      onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Symbol</label>
+                    <input
+                      type="text"
+                      placeholder="AAPL"
+                      value={form.symbol}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))
+                      }
+                      maxLength={20}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Antal</label>
+                    <input
+                      type="number"
+                      placeholder="10"
+                      value={form.shares}
+                      min="0"
+                      step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, shares: e.target.value }))}
+                      className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Gns. købskurs</label>
+                    <input
+                      type="number"
+                      placeholder="150.00"
+                      value={form.avgBuyPrice}
+                      min="0"
+                      step="any"
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, avgBuyPrice: e.target.value }))
+                      }
+                      className="w-32 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                </>
+              )}
               <button
                 type="submit"
                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
@@ -399,7 +515,9 @@ export default function Dashboard() {
             </div>
             {formError && <p className="text-xs text-red-600 mt-2">{formError}</p>}
             <p className="text-xs text-gray-400 mt-2">
-              {form.type === 'crypto'
+              {form.type === 'crowdlending'
+                ? 'Rente pr. måned i den valgte valuta'
+                : form.type === 'crypto'
                 ? 'Krypto eksempel: BTC-USD · ETH-USD · SOL-USD'
                 : 'Aktie eksempel: AAPL · NOVO-B.CO · TSLA'}
             </p>
@@ -614,6 +732,117 @@ export default function Dashboard() {
           </>
         )}
       </div>
+
+      {/* Crowdlending section */}
+      {filteredCrowdlending.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              Crowdlending ({filteredCrowdlending.length})
+            </h3>
+          </div>
+
+          {/* Desktop */}
+          <div className="hidden sm:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-left">Platform</th>
+                  <th className="px-3 py-3 text-right">Investeret</th>
+                  <th className="px-3 py-3 text-right">Rente/md.</th>
+                  <th className="px-3 py-3 text-right">Startdato</th>
+                  <th className="px-3 py-3 text-right">Renteindtægt</th>
+                  <th className="px-3 py-3 text-right">Nuværende værdi</th>
+                  <th className="px-3 py-3 text-right">Afkast %</th>
+                  <th className="w-12" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredCrowdlending.map((cl) => {
+                  const c = showDKK ? 'DKK' : cl.currency;
+                  const m = showDKK ? cl.rate : 1;
+                  return (
+                    <tr key={cl.id} className="hover:bg-gray-50 group transition-colors">
+                      <td className="px-5 py-3.5">
+                        <div className="font-bold text-gray-900">{cl.name}</div>
+                        <div className="text-xs text-gray-400">{cl.currency}</div>
+                      </td>
+                      <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
+                        {fmt(cl.invested * m, c)}
+                      </td>
+                      <td className="px-3 py-3.5 text-right tabular-nums text-gray-500">
+                        {fmt(cl.monthlyReturn * m, c)}/md.
+                      </td>
+                      <td className="px-3 py-3.5 text-right text-xs text-gray-400">
+                        {new Date(cl.startDate).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </td>
+                      <td className="px-3 py-3.5 text-right tabular-nums font-medium text-green-600">
+                        +{fmt(cl.interest * m, c)}
+                      </td>
+                      <td className="px-3 py-3.5 text-right tabular-nums font-bold text-gray-900">
+                        {fmt(cl.currentValue * m, c)}
+                      </td>
+                      <td className={`px-3 py-3.5 text-right tabular-nums font-bold ${gainColor(cl.returnPct)}`}>
+                        {fmtPct(cl.returnPct)}
+                      </td>
+                      <td className="px-3 py-3.5">
+                        <button
+                          onClick={() => removeHolding(cl.id)}
+                          aria-label={`Fjern ${cl.name}`}
+                          className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile */}
+          <div className="sm:hidden divide-y divide-gray-100">
+            {filteredCrowdlending.map((cl) => {
+              const c = showDKK ? 'DKK' : cl.currency;
+              const m = showDKK ? cl.rate : 1;
+              return (
+                <div key={cl.id} className="px-4 py-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <span className="font-bold text-base text-gray-900">{cl.name}</span>
+                      <span className="text-xs text-gray-400 ml-2">{cl.currency}</span>
+                    </div>
+                    <button
+                      onClick={() => removeHolding(cl.id)}
+                      aria-label={`Fjern ${cl.name}`}
+                      className="p-1 text-gray-300 hover:text-red-400 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-y-2 text-sm">
+                    <span className="text-gray-500">Investeret</span>
+                    <span className="text-right font-medium text-gray-900">{fmt(cl.invested * m, c)}</span>
+                    <span className="text-gray-500">Rente/md.</span>
+                    <span className="text-right font-medium text-gray-900">{fmt(cl.monthlyReturn * m, c)}</span>
+                    <span className="text-gray-500">Renteindtægt</span>
+                    <span className="text-right font-bold text-green-600">+{fmt(cl.interest * m, c)}</span>
+                    <span className="text-gray-500">Nuværende værdi</span>
+                    <span className="text-right font-bold text-gray-900">{fmt(cl.currentValue * m, c)}</span>
+                    <span className="text-gray-500">Afkast %</span>
+                    <span className={`text-right font-bold ${gainColor(cl.returnPct)}`}>{fmtPct(cl.returnPct)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Footer note */}
       {Object.keys(summary).length > 0 && (
