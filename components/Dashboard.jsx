@@ -26,6 +26,8 @@ function gainColor(value) {
 export default function Dashboard() {
   const [holdings, setHoldings] = useState(null);
   const [prices, setPrices] = useState({});
+  const [dkkRates, setDkkRates] = useState({ DKK: 1 });
+  const [showDKK, setShowDKK] = useState(false);
   const [loading, setLoading] = useState(false);
   const [priceError, setPriceError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -80,6 +82,14 @@ export default function Dashboard() {
     }
   }, [holdings, fetchPrices]);
 
+  // Fetch DKK exchange rates once on mount
+  useEffect(() => {
+    fetch('/api/rates')
+      .then((r) => r.json())
+      .then((d) => setDkkRates(d.rates || { DKK: 1 }))
+      .catch(() => {}); // keep fallback defaults
+  }, []);
+
   const addHolding = (e) => {
     e.preventDefault();
     const symbol = form.symbol.trim().toUpperCase();
@@ -101,11 +111,12 @@ export default function Dashboard() {
 
   const removeHolding = (id) => setHoldings((prev) => prev.filter((h) => h.id !== id));
 
-  // Enrich each holding with live price data
+  // Enrich each holding with live price data (+ DKK equivalents)
   const enriched = (holdings || []).map((h) => {
     const p = prices[h.symbol];
     const currentPrice = p?.price ?? null;
     const currency = p?.currency || 'USD';
+    const rate = dkkRates[currency] ?? 6.9;
     const currentValue = currentPrice !== null ? h.shares * currentPrice : null;
     const invested = h.shares * h.avgBuyPrice;
     const gainLoss = currentValue !== null ? currentValue - invested : null;
@@ -121,16 +132,32 @@ export default function Dashboard() {
       gainLoss,
       gainLossPct,
       dayChangePct: p?.changePercent ?? null,
+      // DKK equivalents
+      dkkRate: rate,
+      currentValueDKK: currentValue !== null ? currentValue * rate : null,
+      investedDKK: invested * rate,
+      gainLossDKK: gainLoss !== null ? gainLoss * rate : null,
     };
   });
 
-  // Summary grouped by currency
+  // Display currency helper
+  const displayCurrency = showDKK ? 'DKK' : null; // null = use native
+  const val   = (h) => showDKK ? h.currentValueDKK : h.currentValue;
+  const inv   = (h) => showDKK ? h.investedDKK     : h.invested;
+  const gain  = (h) => showDKK ? h.gainLossDKK     : h.gainLoss;
+  const cur   = (h) => showDKK ? 'DKK'             : h.currency;
+  const price = (h) => showDKK && h.currentPrice != null
+    ? h.currentPrice * h.dkkRate
+    : h.currentPrice;
+
+  // Summary
   const summary = {};
   for (const h of enriched) {
-    if (h.currentValue === null) continue;
-    if (!summary[h.currency]) summary[h.currency] = { value: 0, invested: 0 };
-    summary[h.currency].value += h.currentValue;
-    summary[h.currency].invested += h.invested;
+    if (val(h) === null) continue;
+    const c = cur(h);
+    if (!summary[c]) summary[c] = { value: 0, invested: 0 };
+    summary[c].value    += val(h);
+    summary[c].invested += inv(h);
   }
 
   return (
@@ -218,6 +245,16 @@ export default function Dashboard() {
               className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {loading ? 'Opdaterer...' : 'Opdater kurser'}
+            </button>
+            <button
+              onClick={() => setShowDKK((v) => !v)}
+              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+                showDKK
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              DKK
             </button>
             <button
               onClick={() => setShowForm((v) => !v)}
@@ -386,27 +423,27 @@ export default function Dashboard() {
                         {h.shares}
                       </td>
                       <td className="px-3 py-3.5 text-right tabular-nums text-gray-500">
-                        {fmt(h.avgBuyPrice, h.currency)}
+                        {fmt(h.avgBuyPrice, cur(h))}
                       </td>
                       <td className="px-3 py-3.5 text-right tabular-nums font-medium text-gray-900">
-                        {h.currentPrice !== null ? (
-                          fmt(h.currentPrice, h.currency)
+                        {price(h) !== null ? (
+                          fmt(price(h), cur(h))
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
                       <td className="px-3 py-3.5 text-right tabular-nums font-medium text-gray-900">
-                        {h.currentValue !== null ? (
-                          fmt(h.currentValue, h.currency)
+                        {val(h) !== null ? (
+                          fmt(val(h), cur(h))
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
                       <td
-                        className={`px-3 py-3.5 text-right tabular-nums font-semibold ${gainColor(h.gainLoss)}`}
+                        className={`px-3 py-3.5 text-right tabular-nums font-semibold ${gainColor(gain(h))}`}
                       >
-                        {h.gainLoss !== null ? (
-                          `${h.gainLoss >= 0 ? '+' : ''}${fmt(h.gainLoss, h.currency)}`
+                        {gain(h) !== null ? (
+                          `${gain(h) >= 0 ? '+' : ''}${fmt(gain(h), cur(h))}`
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
@@ -492,16 +529,16 @@ export default function Dashboard() {
                     <span className="text-right font-medium text-gray-900">{h.shares}</span>
                     <span className="text-gray-500">Kurs nu</span>
                     <span className="text-right font-medium text-gray-900">
-                      {h.currentPrice !== null ? fmt(h.currentPrice, h.currency) : '—'}
+                      {price(h) !== null ? fmt(price(h), cur(h)) : '—'}
                     </span>
                     <span className="text-gray-500">Kursværdi</span>
                     <span className="text-right font-medium text-gray-900">
-                      {h.currentValue !== null ? fmt(h.currentValue, h.currency) : '—'}
+                      {val(h) !== null ? fmt(val(h), cur(h)) : '—'}
                     </span>
                     <span className="text-gray-500">Afkast</span>
-                    <span className={`text-right font-bold ${gainColor(h.gainLoss)}`}>
-                      {h.gainLoss !== null
-                        ? `${h.gainLoss >= 0 ? '+' : ''}${fmt(h.gainLoss, h.currency)}`
+                    <span className={`text-right font-bold ${gainColor(gain(h))}`}>
+                      {gain(h) !== null
+                        ? `${gain(h) >= 0 ? '+' : ''}${fmt(gain(h), cur(h))}`
                         : '—'}
                     </span>
                     <span className="text-gray-500">Afkast %</span>
