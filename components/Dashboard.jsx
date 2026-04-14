@@ -31,8 +31,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [priceError, setPriceError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [assetFilter, setAssetFilter] = useState('all'); // 'all' | 'stock' | 'crypto'
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ symbol: '', shares: '', avgBuyPrice: '' });
+  const [form, setForm] = useState({ symbol: '', shares: '', avgBuyPrice: '', type: 'stock' });
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
@@ -102,9 +103,9 @@ export default function Dashboard() {
 
     setHoldings((prev) => [
       ...prev,
-      { id: `${symbol}-${Date.now()}`, symbol, shares, avgBuyPrice },
+      { id: `${symbol}-${Date.now()}`, symbol, shares, avgBuyPrice, type: form.type },
     ]);
-    setForm({ symbol: '', shares: '', avgBuyPrice: '' });
+    setForm({ symbol: '', shares: '', avgBuyPrice: '', type: form.type });
     setFormError('');
     setShowForm(false);
   };
@@ -149,6 +150,14 @@ export default function Dashboard() {
   const price = (h) => showDKK && h.currentPrice != null
     ? h.currentPrice * h.dkkRate
     : h.currentPrice;
+
+  // Filter by asset type
+  const filteredEnriched = assetFilter === 'all'
+    ? enriched
+    : enriched.filter((h) => {
+        if (assetFilter === 'crypto') return h.type === 'crypto';
+        return h.type === 'stock' || !h.type;
+      });
 
   // Summary
   const summary = {};
@@ -237,6 +246,28 @@ export default function Dashboard() {
                 })}
               </span>
             )}
+            {/* Asset type filter tabs */}
+            {holdings?.length > 0 && (
+              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                {[
+                  { label: 'Alle', value: 'all' },
+                  { label: 'Aktier', value: 'stock' },
+                  { label: 'Krypto', value: 'crypto' },
+                ].map((tab) => (
+                  <button
+                    key={tab.value}
+                    onClick={() => setAssetFilter(tab.value)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      assetFilter === tab.value
+                        ? 'bg-white text-gray-900 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -273,7 +304,7 @@ export default function Dashboard() {
                   d="M12 4v16m8-8H4"
                 />
               </svg>
-              Tilføj aktie
+              Tilføj {form.type === 'crypto' ? 'krypto' : 'aktie'}
             </button>
           </div>
         </div>
@@ -285,6 +316,29 @@ export default function Dashboard() {
             className="px-5 py-4 bg-blue-50 border-b border-blue-100"
           >
             <div className="flex flex-wrap gap-2 items-end">
+              {/* Type toggle */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-gray-600">Type</label>
+                <div className="flex gap-0.5 bg-gray-200 rounded-lg p-0.5">
+                  {[
+                    { label: 'Aktie', value: 'stock' },
+                    { label: 'Krypto', value: 'crypto' },
+                  ].map((t) => (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, type: t.value }))}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                        form.type === t.value
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-gray-600">Symbol</label>
                 <input
@@ -345,7 +399,9 @@ export default function Dashboard() {
             </div>
             {formError && <p className="text-xs text-red-600 mt-2">{formError}</p>}
             <p className="text-xs text-gray-400 mt-2">
-              Dansk aktiesymbol eksempel: NOVO-B.CO · Krypto: BTC-USD
+              {form.type === 'crypto'
+                ? 'Krypto eksempel: BTC-USD · ETH-USD · SOL-USD'
+                : 'Aktie eksempel: AAPL · NOVO-B.CO · TSLA'}
             </p>
           </form>
         )}
@@ -390,7 +446,7 @@ export default function Dashboard() {
         )}
 
         {/* Desktop table */}
-        {holdings !== null && holdings.length > 0 && (
+        {holdings !== null && filteredEnriched.length > 0 && (
           <>
             <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm">
@@ -408,7 +464,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {enriched.map((h) => (
+                  {filteredEnriched.map((h) => (
                     <tr
                       key={h.id}
                       className="hover:bg-gray-50 group transition-colors"
@@ -495,7 +551,7 @@ export default function Dashboard() {
 
             {/* Mobile cards */}
             <div className="sm:hidden divide-y divide-gray-100">
-              {enriched.map((h) => (
+              {filteredEnriched.map((h) => (
                 <div key={h.id} className="px-4 py-4">
                   <div className="flex items-start justify-between mb-3">
                     <div>
