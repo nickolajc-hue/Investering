@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
+
+const PortfolioChart = dynamic(() => import('./PortfolioChart'), { ssr: false });
 
 function fmt(amount, currency) {
   if (amount == null || isNaN(amount)) return '—';
@@ -282,6 +285,9 @@ export default function Dashboard() {
           })}
         </div>
       )}
+
+      {/* Portfolio chart */}
+      <PortfolioChart holdings={holdings || []} rates={dkkRates} />
 
       {/* Holdings card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">

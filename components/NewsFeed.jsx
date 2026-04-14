@@ -26,20 +26,27 @@ function formatDate(isoDate) {
   return date.toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function NewsCard({ item, color }) {
+function NewsCard({ item, color, isNew }) {
   return (
     <a
       href={item.link}
       target="_blank"
       rel="noopener noreferrer"
-      className="group flex flex-col bg-white rounded-xl border border-gray-200 p-5 hover:border-gray-300 hover:shadow-md transition-all duration-200"
+      className={`group flex flex-col bg-white rounded-xl border p-5 hover:shadow-md transition-all duration-200 ${
+        isNew ? 'border-blue-300 hover:border-blue-400' : 'border-gray-200 hover:border-gray-300'
+      }`}
     >
       <div className="flex items-center justify-between mb-3">
-        <span
-          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${color.bg} ${color.text} ${color.border}`}
-        >
-          {item.symbol}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${color.bg} ${color.text} ${color.border}`}
+          >
+            {item.symbol}
+          </span>
+          {isNew && (
+            <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" title="Ny nyhed" />
+          )}
+        </div>
         <span className="text-xs text-gray-400 tabular-nums">{formatDate(item.pubDate)}</span>
       </div>
       <h3 className="text-sm font-semibold text-gray-900 mb-2 leading-snug group-hover:text-blue-600 transition-colors line-clamp-3">
@@ -77,7 +84,7 @@ function SkeletonCard() {
   );
 }
 
-export default function NewsFeed() {
+export default function NewsFeed({ lastNewsCheck = 0 }) {
   const [symbols, setSymbols] = useState(null);
   const [newSymbol, setNewSymbol] = useState('');
   const [news, setNews] = useState([]);
@@ -328,6 +335,7 @@ export default function NewsFeed() {
               key={`${item.symbol}-${index}`}
               item={item}
               color={getColor(item.symbol)}
+              isNew={lastNewsCheck === 0 || new Date(item.pubDate).getTime() > lastNewsCheck}
             />
           ))}
         </div>
