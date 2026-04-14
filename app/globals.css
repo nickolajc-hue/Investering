@@ -1,3 +1,25 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html {
+  /* Prevent font size inflation on orientation change in iOS */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  overflow-x: hidden;
+  /* Momentum scrolling on iOS */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Remove blue tap flash on iOS */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Faster tap response on touch devices */
+button,
+a {
+  touch-action: manipulation;
+}

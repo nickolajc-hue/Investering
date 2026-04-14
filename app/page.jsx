@@ -64,6 +64,51 @@ function NewsCard({ item, color }) {
   );
 }
 
+function InstallHint() {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isStandalone = window.navigator.standalone === true;
+    const dismissed = localStorage.getItem('install-hint-dismissed');
+    if (isIOS && !isStandalone && !dismissed) {
+      setShow(true);
+    }
+  }, []);
+
+  if (!show) return null;
+
+  return (
+    <div className="fixed bottom-4 left-4 right-4 bg-gray-900 text-white rounded-2xl p-4 shadow-2xl z-50 flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold mb-0.5">Installer som app</p>
+        <p className="text-xs text-gray-300 leading-relaxed">
+          Tryk på{' '}
+          <span className="inline-flex items-center gap-0.5 font-medium">
+            Del
+            <svg className="w-3.5 h-3.5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+          </span>{' '}
+          og vælg <span className="font-medium">"Føj til hjemmeskærm"</span>
+        </p>
+      </div>
+      <button
+        onClick={() => {
+          setShow(false);
+          localStorage.setItem('install-hint-dismissed', '1');
+        }}
+        aria-label="Luk"
+        className="text-gray-400 hover:text-white transition-colors mt-0.5 flex-shrink-0"
+      >
+        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function SkeletonCard() {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5 animate-pulse">
@@ -92,6 +137,12 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [activeFilter, setActiveFilter] = useState('all');
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-portfolio');
@@ -366,6 +417,7 @@ export default function Home() {
           </div>
         )}
       </main>
+      <InstallHint />
     </div>
   );
 }
