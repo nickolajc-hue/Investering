@@ -39,6 +39,7 @@ export default function Dashboard() {
   const [form, setForm] = useState({
     type: 'stock',
     symbol: '', shares: '', avgBuyPrice: '',
+    sector: '', annualDividend: '',
     name: '', invested: '', currency: 'DKK', startDate: '',
   });
   const [formError, setFormError] = useState('');
@@ -128,15 +129,23 @@ export default function Dashboard() {
       if (!symbol) return setFormError('Angiv et symbol');
       if (!shares || shares <= 0) return setFormError('Antal skal være større end 0');
       if (!avgBuyPrice || avgBuyPrice <= 0) return setFormError('Gns. kurs skal være større end 0');
+      const annualDividend = parseFloat(form.annualDividend.replace(',', '.')) || 0;
       setHoldings((prev) => [
         ...prev,
-        { id: `${symbol}-${Date.now()}`, symbol, shares, avgBuyPrice, type: form.type },
+        {
+          id: `${symbol}-${Date.now()}`,
+          symbol, shares, avgBuyPrice,
+          type: form.type,
+          sector: form.sector || undefined,
+          annualDividend: annualDividend > 0 ? annualDividend : undefined,
+        },
       ]);
     }
 
     setForm((f) => ({
       type: f.type,
       symbol: '', shares: '', avgBuyPrice: '',
+      sector: '', annualDividend: '',
       name: '', invested: '', currency: 'DKK', startDate: '',
     }));
     setFormError('');
@@ -193,6 +202,11 @@ export default function Dashboard() {
       currentValueDKK: currentValue !== null ? currentValue * rate : null,
       investedDKK: invested * rate,
       gainLossDKK: gainLoss !== null ? gainLoss * rate : null,
+      // Dividend
+      dividendYield: h.annualDividend && currentPrice
+        ? (h.annualDividend / currentPrice) * 100
+        : null,
+      annualDividendDKK: h.annualDividend ? h.annualDividend * h.shares * rate : 0,
     };
   });
 
@@ -228,6 +242,9 @@ export default function Dashboard() {
   const filteredCrowdlending = assetFilter === 'crowdlending' || assetFilter === 'all'
     ? crowdlendingRows
     : [];
+
+  // Portfolio dividend yield (DKK)
+  const totalAnnualDividendDKK = enriched.reduce((s, h) => s + (h.annualDividendDKK || 0), 0);
 
   // Summary (stocks + crypto + crowdlending)
   const summary = {};
@@ -265,42 +282,53 @@ export default function Dashboard() {
             const gain = value - invested;
             const gainPct = invested > 0 ? (gain / invested) * 100 : 0;
             return (
-              <div key={cur} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div key={cur} className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="col-span-2 sm:col-span-2 bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                    {Object.keys(summary).length > 1
-                      ? `Kursværdi (${cur})`
-                      : 'Samlet kursværdi'}
+                    {Object.keys(summary).length > 1 ? `Kursværdi (${cur})` : 'Samlet kursværdi'}
                   </p>
                   <p className="text-2xl font-bold text-gray-900 tabular-nums">
                     {fmt(value, cur)}
                   </p>
                   <p className="text-xs text-gray-400 mt-1">
-                    Investeret:{' '}
-                    <span className="tabular-nums font-medium">{fmt(invested, cur)}</span>
+                    Investeret: <span className="tabular-nums font-medium">{fmt(invested, cur)}</span>
                   </p>
                 </div>
-                <div
-                  className={`bg-white rounded-xl border p-4 shadow-sm ${gain >= 0 ? 'border-green-200' : 'border-red-200'}`}
-                >
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                    Afkast
-                  </p>
+                <div className={`bg-white rounded-xl border p-4 shadow-sm ${gain >= 0 ? 'border-green-200' : 'border-red-200'}`}>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Afkast</p>
                   <p className={`text-xl font-bold tabular-nums ${gainColor(gain)}`}>
-                    {gain >= 0 ? '+' : ''}
-                    {fmt(gain, cur)}
+                    {gain >= 0 ? '+' : ''}{fmt(gain, cur)}
                   </p>
                 </div>
-                <div
-                  className={`bg-white rounded-xl border p-4 shadow-sm ${gainPct >= 0 ? 'border-green-200' : 'border-red-200'}`}
-                >
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                    Afkast %
-                  </p>
-                  <p className={`text-xl font-bold ${gainColor(gainPct)}`}>
-                    {fmtPct(gainPct)}
-                  </p>
+                <div className={`bg-white rounded-xl border p-4 shadow-sm ${gainPct >= 0 ? 'border-green-200' : 'border-red-200'}`}>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Afkast %</p>
+                  <p className={`text-xl font-bold ${gainColor(gainPct)}`}>{fmtPct(gainPct)}</p>
                 </div>
+              </div>{/* end grid */}
+              {/* Portfolio dividend yield — only shown when any holding has a dividend */}
+              {totalAnnualDividendDKK > 0 && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                      Årsudbytte (DKK)
+                    </p>
+                    <p className="text-xl font-bold text-indigo-600 tabular-nums">
+                      {fmt(totalAnnualDividendDKK, 'DKK')}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                      Portefølje udbytte%
+                    </p>
+                    <p className="text-xl font-bold text-indigo-600 tabular-nums">
+                      {value > 0
+                        ? `${((totalAnnualDividendDKK / (showDKK ? value : value)) * 100).toFixed(2).replace('.', ',')}%`
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+              )}
               </div>
             );
           })}
@@ -503,10 +531,33 @@ export default function Dashboard() {
                       value={form.avgBuyPrice}
                       min="0"
                       step="any"
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, avgBuyPrice: e.target.value }))
-                      }
+                      onChange={(e) => setForm((f) => ({ ...f, avgBuyPrice: e.target.value }))}
                       className="w-32 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Sektor</label>
+                    <select
+                      value={form.sector}
+                      onChange={(e) => setForm((f) => ({ ...f, sector: e.target.value }))}
+                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    >
+                      <option value="">— valgfri —</option>
+                      {['Tech','Finans','Sundhed','Energi','Forbrugsgoder','Industri','Materialer','Kommunikation','Ejendomme','Forsyning','Andet'].map((s) => (
+                        <option key={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Udbytte/aktie (år)</label>
+                    <input
+                      type="number"
+                      placeholder="2.50"
+                      value={form.annualDividend}
+                      min="0"
+                      step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, annualDividend: e.target.value }))}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                     />
                   </div>
                 </>
@@ -593,6 +644,7 @@ export default function Dashboard() {
                     <th className="px-3 py-3 text-right">Afkast</th>
                     <th className="px-3 py-3 text-right">Afkast %</th>
                     <th className="px-3 py-3 text-right">I dag</th>
+                    <th className="px-3 py-3 text-right">Udbytte%</th>
                     <th className="w-12" />
                   </tr>
                 </thead>
@@ -604,9 +656,12 @@ export default function Dashboard() {
                     >
                       <td className="px-5 py-3.5">
                         <div className="font-bold text-gray-900">{h.symbol}</div>
-                        <div className="text-xs text-gray-400 max-w-[140px] truncate">
-                          {h.name}
-                        </div>
+                        <div className="text-xs text-gray-400 max-w-[160px] truncate">{h.name}</div>
+                        {h.sector && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0 rounded text-[10px] font-semibold bg-gray-100 text-gray-500">
+                            {h.sector}
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
                         {h.shares}
@@ -646,14 +701,11 @@ export default function Dashboard() {
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
-                      <td
-                        className={`px-3 py-3.5 text-right tabular-nums text-xs ${gainColor(h.dayChangePct)}`}
-                      >
-                        {h.dayChangePct !== null ? (
-                          fmtPct(h.dayChangePct)
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
+                      <td className={`px-3 py-3.5 text-right tabular-nums text-xs ${gainColor(h.dayChangePct)}`}>
+                        {h.dayChangePct !== null ? fmtPct(h.dayChangePct) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-3 py-3.5 text-right tabular-nums text-xs text-indigo-600 font-medium">
+                        {h.dividendYield != null ? `${h.dividendYield.toFixed(2).replace('.', ',')}%` : <span className="text-gray-200">—</span>}
                       </td>
                       <td className="px-3 py-3.5">
                         <button
