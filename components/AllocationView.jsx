@@ -34,11 +34,11 @@ const DEFAULT_STRATEGY = () => ({
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/** Effective routing tag for a holding (type + optional sector override) */
-function holdingTag(h) {
-  if (h.type === 'crowdlending') return 'crowdlending';
-  if (h.sector) return h.sector;
-  return h.type || 'stock';
+/** All effective tags for a holding: type + sectors (backward compat with single sector) */
+function effectiveTags(h) {
+  const type = h.type === 'crowdlending' ? 'crowdlending' : (h.type || 'stock');
+  const sectors = h.sectors ?? (h.sector ? [h.sector] : []);
+  return [type, ...sectors];
 }
 
 /** DKK value of a holding given prices + rates */
@@ -87,29 +87,35 @@ function StrategyCard({ strategy, allHoldings, prices, rates, onChange, onDelete
   });
   const [formErr, setFormErr] = useState('');
 
-  // Compute current DKK values per bucket
-  const dkkByTag = {};
+  // Assign each holding to the FIRST bucket whose tags overlap its effective tags
   let totalDKK = 0;
+  const bucketValues = {};
+  const assignedIds = new Set();
   for (const h of allHoldings) {
     const v = holdingDKK(h, prices, rates);
     if (v == null) continue;
-    const tag = holdingTag(h);
-    dkkByTag[tag] = (dkkByTag[tag] ?? 0) + v;
     totalDKK += v;
+    const tags = effectiveTags(h);
+    for (const b of strategy.buckets) {
+      if (b.tags.some((t) => tags.includes(t))) {
+        bucketValues[b.id] = (bucketValues[b.id] ?? 0) + v;
+        assignedIds.add(h.id);
+        break; // first match only — no double-counting
+      }
+    }
   }
 
   const buckets = strategy.buckets.map((b) => {
-    const value = b.tags.reduce((s, t) => s + (dkkByTag[t] ?? 0), 0);
+    const value = bucketValues[b.id] ?? 0;
     const currentPct = totalDKK > 0 ? (value / totalDKK) * 100 : 0;
     const diff = currentPct - b.target;
     return { ...b, value, currentPct, diff };
   });
 
-  // Holdings not covered by any bucket
-  const coveredTags = new Set(strategy.buckets.flatMap((b) => b.tags));
+  // Holdings not matched by any bucket
   const unassigned = allHoldings.filter((h) => {
     const v = holdingDKK(h, prices, rates);
-    return v !== null && !coveredTags.has(holdingTag(h));
+    return v !== null && !assignedIds.has(h.id);
   });
 
   const totalTarget = strategy.buckets.reduce((s, b) => s + Number(b.target), 0);

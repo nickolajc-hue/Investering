@@ -26,6 +26,62 @@ function gainColor(value) {
   return value >= 0 ? 'text-green-600' : 'text-red-600';
 }
 
+const PRESET_SECTORS = [
+  'Tech','Finans','Sundhed','Energi','Forbrugsgoder',
+  'Industri','Materialer','Kommunikation','Ejendomme','Forsyning','Andet',
+];
+
+/** Sector tag-picker — shown inside the add/edit form for stocks */
+function SectorPicker({ selected, onToggle, customSectors, onAddCustom }) {
+  const [input, setInput] = useState('');
+  const all = [...PRESET_SECTORS, ...customSectors];
+  const add = () => {
+    const v = input.trim();
+    if (v && !all.map(s => s.toLowerCase()).includes(v.toLowerCase())) onAddCustom(v);
+    if (v && !selected.includes(v)) onToggle(v);
+    setInput('');
+  };
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap gap-1">
+        {all.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => onToggle(s)}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
+              selected.includes(s)
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <input
+          type="text"
+          placeholder="Ny sektor…"
+          value={input}
+          maxLength={25}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          className="w-32 px-2 py-1 text-xs border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={!input.trim()}
+          className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-40 transition-colors"
+        >
+          + Tilføj
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [holdings, setHoldings] = useState(null);
   const [prices, setPrices] = useState({});
@@ -36,13 +92,15 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [assetFilter, setAssetFilter] = useState('all'); // 'all' | 'stock' | 'crypto'
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
     type: 'stock',
     symbol: '', shares: '', avgBuyPrice: '',
-    sector: '', annualDividend: '',
+    sectors: [], annualDividend: '',
     name: '', invested: '', currency: 'DKK', startDate: '',
   });
   const [formError, setFormError] = useState('');
+  const [customSectors, setCustomSectors] = useState([]);
   // { clId, amount, date } — open payment form for a crowdlending row
   const [paymentForm, setPaymentForm] = useState(null);
   const [paymentError, setPaymentError] = useState('');
@@ -61,6 +119,19 @@ export default function Dashboard() {
       localStorage.setItem('aktie-beholdninger', JSON.stringify(holdings));
     }
   }, [holdings]);
+
+  // Custom sectors
+  useEffect(() => {
+    const saved = localStorage.getItem('custom-sectors');
+    try { if (saved) setCustomSectors(JSON.parse(saved)); } catch {}
+  }, []);
+  const addCustomSector = (name) => {
+    setCustomSectors((prev) => {
+      const next = [...prev, name];
+      localStorage.setItem('custom-sectors', JSON.stringify(next));
+      return next;
+    });
+  };
 
   const fetchPrices = useCallback(async (list) => {
     if (!list || list.length === 0) {
@@ -102,7 +173,7 @@ export default function Dashboard() {
       .catch(() => {}); // keep fallback defaults
   }, []);
 
-  const addHolding = (e) => {
+  const saveHolding = (e) => {
     e.preventDefault();
 
     if (form.type === 'crowdlending') {
@@ -110,18 +181,16 @@ export default function Dashboard() {
       const invested = parseFloat(form.invested.replace(',', '.'));
       if (!name) return setFormError('Angiv et platformsnavn');
       if (!invested || invested <= 0) return setFormError('Investeret beløb skal være større end 0');
-      setHoldings((prev) => [
-        ...prev,
-        {
-          id: `CL-${Date.now()}`,
-          type: 'crowdlending',
-          name,
-          invested,
-          currency: form.currency,
-          startDate: form.startDate || new Date().toISOString().split('T')[0],
-          payments: [],
-        },
-      ]);
+      const patch = {
+        type: 'crowdlending', name, invested,
+        currency: form.currency,
+        startDate: form.startDate || new Date().toISOString().split('T')[0],
+      };
+      if (editingId) {
+        setHoldings((prev) => prev.map((h) => h.id === editingId ? { ...h, ...patch } : h));
+      } else {
+        setHoldings((prev) => [...prev, { id: `CL-${Date.now()}`, ...patch, payments: [] }]);
+      }
     } else {
       const symbol = form.symbol.trim().toUpperCase();
       const shares = parseFloat(form.shares.replace(',', '.'));
@@ -130,26 +199,52 @@ export default function Dashboard() {
       if (!shares || shares <= 0) return setFormError('Antal skal være større end 0');
       if (!avgBuyPrice || avgBuyPrice <= 0) return setFormError('Gns. kurs skal være større end 0');
       const annualDividend = parseFloat(form.annualDividend.replace(',', '.')) || 0;
-      setHoldings((prev) => [
-        ...prev,
-        {
-          id: `${symbol}-${Date.now()}`,
-          symbol, shares, avgBuyPrice,
-          type: form.type,
-          sector: form.sector || undefined,
-          annualDividend: annualDividend > 0 ? annualDividend : undefined,
-        },
-      ]);
+      const patch = {
+        symbol, shares, avgBuyPrice, type: form.type,
+        sectors: form.sectors.length ? form.sectors : undefined,
+        annualDividend: annualDividend > 0 ? annualDividend : undefined,
+      };
+      if (editingId) {
+        setHoldings((prev) => prev.map((h) => h.id === editingId ? { ...h, ...patch } : h));
+      } else {
+        setHoldings((prev) => [...prev, { id: `${symbol}-${Date.now()}`, ...patch }]);
+      }
     }
 
+    setEditingId(null);
     setForm((f) => ({
       type: f.type,
-      symbol: '', shares: '', avgBuyPrice: '',
-      sector: '', annualDividend: '',
+      symbol: '', shares: '', avgBuyPrice: '', sectors: [], annualDividend: '',
       name: '', invested: '', currency: 'DKK', startDate: '',
     }));
     setFormError('');
     setShowForm(false);
+  };
+
+  const startEdit = (h) => {
+    setEditingId(h.id);
+    setShowForm(true);
+    setFormError('');
+    if (h.type === 'crowdlending') {
+      setForm({
+        type: 'crowdlending',
+        symbol: '', shares: '', avgBuyPrice: '', sectors: [], annualDividend: '',
+        name: h.name || '',
+        invested: String(h.invested ?? ''),
+        currency: h.currency || 'DKK',
+        startDate: h.startDate || '',
+      });
+    } else {
+      setForm({
+        type: h.type || 'stock',
+        symbol: h.symbol || '',
+        shares: String(h.shares ?? ''),
+        avgBuyPrice: String(h.avgBuyPrice ?? ''),
+        sectors: h.sectors || (h.sector ? [h.sector] : []),
+        annualDividend: String(h.annualDividend ?? ''),
+        name: '', invested: '', currency: 'DKK', startDate: '',
+      });
+    }
   };
 
   const removeHolding = (id) => setHoldings((prev) => prev.filter((h) => h.id !== id));
@@ -177,7 +272,9 @@ export default function Dashboard() {
   };
 
   // Enrich each holding with live price data (+ DKK equivalents)
-  const enriched = (holdings || []).map((h) => {
+  const enriched = (holdings || []).filter(h => h.type !== 'crowdlending').map((h) => {
+    // Normalise sectors: old data may have a single `sector` string
+    h = { ...h, sectors: h.sectors ?? (h.sector ? [h.sector] : []) };
     const p = prices[h.symbol];
     const currentPrice = p?.price ?? null;
     const currency = p?.currency || 'USD';
@@ -421,7 +518,7 @@ export default function Dashboard() {
         {/* Add form */}
         {showForm && (
           <form
-            onSubmit={addHolding}
+            onSubmit={saveHolding}
             className="px-5 py-4 bg-blue-50 border-b border-blue-100"
           >
             <div className="flex flex-wrap gap-2 items-end">
@@ -535,18 +632,17 @@ export default function Dashboard() {
                       className="w-32 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                     />
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-gray-600">Sektor</label>
-                    <select
-                      value={form.sector}
-                      onChange={(e) => setForm((f) => ({ ...f, sector: e.target.value }))}
-                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    >
-                      <option value="">— valgfri —</option>
-                      {['Tech','Finans','Sundhed','Energi','Forbrugsgoder','Industri','Materialer','Kommunikation','Ejendomme','Forsyning','Andet'].map((s) => (
-                        <option key={s}>{s}</option>
-                      ))}
-                    </select>
+                  <div className="flex flex-col gap-1 w-full">
+                    <label className="text-xs font-medium text-gray-600">Sektorer (valgfri)</label>
+                    <SectorPicker
+                      selected={form.sectors}
+                      onToggle={(s) => setForm((f) => ({
+                        ...f,
+                        sectors: f.sectors.includes(s) ? f.sectors.filter(x => x !== s) : [...f.sectors, s],
+                      }))}
+                      customSectors={customSectors}
+                      onAddCustom={addCustomSector}
+                    />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs font-medium text-gray-600">Udbytte/aktie (år)</label>
@@ -566,12 +662,13 @@ export default function Dashboard() {
                 type="submit"
                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
               >
-                Tilføj
+                {editingId ? 'Gem ændringer' : 'Tilføj'}
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setShowForm(false);
+                  setEditingId(null);
                   setFormError('');
                 }}
                 className="px-4 py-2 text-sm font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
@@ -657,10 +754,14 @@ export default function Dashboard() {
                       <td className="px-5 py-3.5">
                         <div className="font-bold text-gray-900">{h.symbol}</div>
                         <div className="text-xs text-gray-400 max-w-[160px] truncate">{h.name}</div>
-                        {h.sector && (
-                          <span className="inline-block mt-0.5 px-1.5 py-0 rounded text-[10px] font-semibold bg-gray-100 text-gray-500">
-                            {h.sector}
-                          </span>
+                        {h.sectors?.length > 0 && (
+                          <div className="flex flex-wrap gap-0.5 mt-0.5">
+                            {h.sectors.map((s) => (
+                              <span key={s} className="px-1.5 py-0 rounded text-[10px] font-semibold bg-gray-100 text-gray-500">
+                                {s}
+                              </span>
+                            ))}
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
@@ -708,25 +809,26 @@ export default function Dashboard() {
                         {h.dividendYield != null ? `${h.dividendYield.toFixed(2).replace('.', ',')}%` : <span className="text-gray-200">—</span>}
                       </td>
                       <td className="px-3 py-3.5">
-                        <button
-                          onClick={() => removeHolding(h.id)}
-                          aria-label={`Fjern ${h.symbol}`}
-                          className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
+                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                          <button
+                            onClick={() => startEdit(h)}
+                            aria-label={`Rediger ${h.symbol}`}
+                            className="w-7 h-7 rounded-full hover:bg-blue-50 flex items-center justify-center text-gray-300 hover:text-blue-500 transition-all"
                           >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M6 18L18 6M6 6l12 12"
-                            />
-                          </svg>
-                        </button>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => removeHolding(h.id)}
+                            aria-label={`Fjern ${h.symbol}`}
+                            className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -745,25 +847,18 @@ export default function Dashboard() {
                         {h.name}
                       </span>
                     </div>
-                    <button
-                      onClick={() => removeHolding(h.id)}
-                      aria-label={`Fjern ${h.symbol}`}
-                      className="p-1 text-gray-300 hover:text-red-400 transition-colors"
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => startEdit(h)} aria-label={`Rediger ${h.symbol}`} className="p-1 text-gray-300 hover:text-blue-400 transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                      </button>
+                      <button onClick={() => removeHolding(h.id)} aria-label={`Fjern ${h.symbol}`} className="p-1 text-gray-300 hover:text-red-400 transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-y-2 text-sm">
                     <span className="text-gray-500">Antal</span>
