@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import { buildChartData } from '@/lib/chartUtils';
+import { buildChartData, buildComparisonData } from '@/lib/chartUtils';
 
 const PERIODS = [
   { label: 'Dag',    value: '1d'  },
@@ -16,9 +16,9 @@ const PERIODS = [
 ];
 
 const ASSET_FILTERS = [
-  { label: 'Portefølje', value: 'all' },
-  { label: 'Aktier',     value: 'stock' },
-  { label: 'Krypto',     value: 'crypto' },
+  { label: 'Portefølje',   value: 'all'          },
+  { label: 'Aktier',       value: 'stock'        },
+  { label: 'Krypto',       value: 'crypto'       },
   { label: 'Crowdlending', value: 'crowdlending' },
 ];
 
@@ -35,28 +35,36 @@ function formatDKK(v) {
   return `${v.toFixed(0)}`;
 }
 
-export default function PortfolioChart({ holdings, rates }) {
-  const [period, setPeriod] = useState('1mo');
-  const [viewMode, setViewMode] = useState('dkk');     // 'dkk' | 'pct'
-  const [assetFilter, setAssetFilter] = useState('all');
-  const [fetchedHistory, setFetchedHistory] = useState({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+function fmtPctTick(v) {
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
 
-  const tradable = (holdings || []).filter(
-    (h) => h.type === 'stock' || h.type === 'crypto' || !h.type
-  );
+export default function PortfolioChart({ holdings, rates }) {
+  const [period,          setPeriod]          = useState('1mo');
+  const [viewMode,        setViewMode]        = useState('dkk');   // 'dkk' | 'pct'
+  const [assetFilter,     setAssetFilter]     = useState('all');
+  const [benchInput,      setBenchInput]      = useState('IUSQ');
+  const [benchmarkSymbol, setBenchmarkSymbol] = useState('');       // '' = off
+  const [fetchedHistory,  setFetchedHistory]  = useState({});
+  const [loading,         setLoading]         = useState(false);
+  const [error,           setError]           = useState(null);
+
+  const tradable    = (holdings || []).filter((h) => h.type === 'stock' || h.type === 'crypto' || !h.type);
   const crowdlending = (holdings || []).filter((h) => h.type === 'crowdlending');
 
+  // ── Fetch ──────────────────────────────────────────────────────────────────
   const loadChart = useCallback(async (p) => {
     if (!holdings || holdings.length === 0) return;
-    const symbols = [...new Set(tradable.map((h) => h.symbol))];
+    const symbols = [...new Set([
+      ...tradable.map((h) => h.symbol),
+      ...(benchmarkSymbol ? [benchmarkSymbol] : []),
+    ])];
     setLoading(true);
     setError(null);
     try {
       let history = {};
       if (symbols.length > 0) {
-        const res = await fetch(`/api/history?symbols=${symbols.join(',')}&range=${p}`);
+        const res  = await fetch(`/api/history?symbols=${symbols.join(',')}&range=${p}`);
         const json = await res.json();
         history = json.history || {};
       }
@@ -67,42 +75,57 @@ export default function PortfolioChart({ holdings, rates }) {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(holdings), JSON.stringify(rates)]);
+  }, [JSON.stringify(holdings), JSON.stringify(rates), benchmarkSymbol]);
 
   useEffect(() => { loadChart(period); }, [loadChart, period]);
 
-  // Rebuild chart data when history or filter changes (no extra API call)
-  const rawChartData = useMemo(() => {
-    const filteredTradable = tradable.filter((h) => {
-      if (assetFilter === 'stock')  return h.type === 'stock' || !h.type;
-      if (assetFilter === 'crypto') return h.type === 'crypto';
-      return true;
-    });
-    const filteredCrowdlending =
-      assetFilter === 'all' || assetFilter === 'crowdlending' ? crowdlending : [];
-    return buildChartData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {});
+  // ── Derived data ───────────────────────────────────────────────────────────
+  const filteredTradable = useMemo(() => {
+    if (assetFilter === 'crowdlending') return [];   // ← crowdlending fix
+    if (assetFilter === 'stock')  return tradable.filter((h) => h.type === 'stock'  || !h.type);
+    if (assetFilter === 'crypto') return tradable.filter((h) => h.type === 'crypto');
+    return tradable;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchedHistory, assetFilter, JSON.stringify(tradable), JSON.stringify(crowdlending), JSON.stringify(rates)]);
+  }, [assetFilter, JSON.stringify(tradable)]);
 
-  // Normalize to % if needed
+  const filteredCrowdlending = useMemo(
+    () => assetFilter === 'all' || assetFilter === 'crowdlending' ? crowdlending : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assetFilter, JSON.stringify(crowdlending)]
+  );
+
+  const rawChartData = useMemo(
+    () => buildChartData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {}),
+    [fetchedHistory, filteredTradable, filteredCrowdlending, rates]
+  );
+
+  // Comparison data — only when benchmark is active and history was fetched
+  const compData = useMemo(() => {
+    if (!benchmarkSymbol || !fetchedHistory[benchmarkSymbol]) return null;
+    return buildComparisonData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {}, benchmarkSymbol);
+  }, [fetchedHistory, benchmarkSymbol, filteredTradable, filteredCrowdlending, rates]);
+
+  // Normalise to % for standalone view
   const displayData = useMemo(() => {
+    if (compData) return compData;                 // comparison handles its own normalisation
     if (viewMode === 'dkk' || rawChartData.length === 0) return rawChartData;
     const base = rawChartData.find((d) => d.v > 0)?.v ?? 1;
-    return rawChartData.map((d) => ({
-      t: d.t,
-      v: base > 0 ? ((d.v - base) / base) * 100 : 0,
-    }));
-  }, [rawChartData, viewMode]);
+    return rawChartData.map((d) => ({ t: d.t, v: base > 0 ? ((d.v - base) / base) * 100 : 0 }));
+  }, [compData, rawChartData, viewMode]);
 
-  const first   = rawChartData[0]?.v ?? 0;
-  const last    = rawChartData[rawChartData.length - 1]?.v ?? 0;
-  const gain    = last - first;
-  const gainPct = first > 0 ? (gain / first) * 100 : 0;
+  const isComparison = !!compData;
+  const first    = rawChartData[0]?.v ?? 0;
+  const last     = rawChartData[rawChartData.length - 1]?.v ?? 0;
+  const gain     = last - first;
+  const gainPct  = first > 0 ? (gain / first) * 100 : 0;
   const positive = gain >= 0;
-  const color    = positive ? '#16a34a' : '#dc2626';
+  const portColor = positive ? '#16a34a' : '#dc2626';
 
   if (!holdings || holdings.length === 0) return null;
 
+  const benchmarkMissing = benchmarkSymbol && !loading && fetchedHistory && !fetchedHistory[benchmarkSymbol];
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
       {/* Header */}
@@ -124,32 +147,26 @@ export default function PortfolioChart({ holdings, rates }) {
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          {/* kr. / % toggle */}
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            {[{ label: 'kr.', value: 'dkk' }, { label: '%', value: 'pct' }].map((m) => (
-              <button
-                key={m.value}
-                onClick={() => setViewMode(m.value)}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
-                  viewMode === m.value
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
+          {/* kr./% toggle — hidden when comparison is active */}
+          {!isComparison && (
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+              {[{ label: 'kr.', value: 'dkk' }, { label: '%', value: 'pct' }].map((m) => (
+                <button key={m.value} onClick={() => setViewMode(m.value)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                    viewMode === m.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Period selector */}
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
             {PERIODS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setPeriod(p.value)}
+              <button key={p.value} onClick={() => setPeriod(p.value)}
                 className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
-                  period === p.value
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
+                  period === p.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
                 {p.label}
@@ -159,12 +176,10 @@ export default function PortfolioChart({ holdings, rates }) {
         </div>
       </div>
 
-      {/* Asset filter */}
-      <div className="flex gap-1 mb-3">
+      {/* Asset filter + benchmark input row */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         {ASSET_FILTERS.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => setAssetFilter(f.value)}
+          <button key={f.value} onClick={() => setAssetFilter(f.value)}
             className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
               assetFilter === f.value
                 ? 'bg-gray-900 text-white border-gray-900'
@@ -174,10 +189,48 @@ export default function PortfolioChart({ holdings, rates }) {
             {f.label}
           </button>
         ))}
+
+        <div className="ml-auto flex items-center gap-1">
+          {/* Benchmark input */}
+          {benchmarkSymbol ? (
+            <span className="flex items-center gap-1 px-2.5 py-1 bg-amber-100 text-amber-800 border border-amber-300 rounded-full text-xs font-semibold">
+              vs {benchmarkSymbol}
+              <button
+                onClick={() => { setBenchmarkSymbol(''); setBenchInput('IUSQ'); }}
+                className="hover:text-red-600 transition-colors ml-0.5"
+                aria-label="Fjern sammenligning"
+              >✕</button>
+            </span>
+          ) : (
+            <form
+              onSubmit={(e) => { e.preventDefault(); const s = benchInput.trim().toUpperCase(); if (s) setBenchmarkSymbol(s); }}
+              className="flex gap-1"
+            >
+              <input
+                value={benchInput}
+                onChange={(e) => setBenchInput(e.target.value.toUpperCase())}
+                placeholder="Sammenlign med…"
+                maxLength={15}
+                className="w-32 px-2 py-1 text-xs border border-gray-200 rounded-full focus:outline-none focus:ring-1 focus:ring-blue-400 bg-gray-50"
+              />
+              <button type="submit"
+                className="px-2.5 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-full font-medium transition-colors whitespace-nowrap"
+              >
+                Sammenlign
+              </button>
+            </form>
+          )}
+        </div>
       </div>
 
+      {benchmarkMissing && (
+        <p className="text-xs text-amber-600 mb-2">
+          Kunne ikke finde data for <strong>{benchmarkSymbol}</strong> — tjek symbolet og prøv igen.
+        </p>
+      )}
+
       {/* Chart */}
-      <div className="h-44">
+      <div className="h-48">
         {loading ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-400 animate-pulse">
             Henter historik...
@@ -188,25 +241,61 @@ export default function PortfolioChart({ holdings, rates }) {
           <div className="h-full flex items-center justify-center text-sm text-gray-400">
             Ikke nok data til at vise graf
           </div>
-        ) : (
+        ) : isComparison ? (
+          // ── Comparison mode: two lines, % normalised ───────────────────────
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={displayData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="portGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor={color} stopOpacity={0.15} />
-                  <stop offset="95%" stopColor={color} stopOpacity={0}    />
+                  <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.15} />
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}    />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis
-                dataKey="t" type="number" scale="time" domain={['dataMin', 'dataMax']}
+              <XAxis dataKey="t" type="number" scale="time" domain={['dataMin', 'dataMax']}
+                tickFormatter={(ts) => formatXAxis(ts, period)}
+                tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} minTickGap={40}
+              />
+              <YAxis tickFormatter={fmtPctTick}
+                tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={52}
+              />
+              <Tooltip
+                formatter={(v, name) => [
+                  `${v >= 0 ? '+' : ''}${v.toFixed(2).replace('.', ',')}%`,
+                  name === 'portfolio' ? 'Min portefølje' : benchmarkSymbol,
+                ]}
+                labelFormatter={(ts) => new Date(ts).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' })}
+                contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' }}
+              />
+              <Legend
+                formatter={(name) => name === 'portfolio' ? 'Min portefølje' : benchmarkSymbol}
+                iconType="line" wrapperStyle={{ fontSize: 11 }}
+              />
+              <Area type="monotone" dataKey="portfolio" stroke="#3b82f6" strokeWidth={2}
+                fill="url(#portGrad)" dot={false} activeDot={{ r: 4, strokeWidth: 0 }}
+              />
+              <Area type="monotone" dataKey="benchmark" stroke="#f59e0b" strokeWidth={2}
+                fill="none" strokeDasharray="4 2" dot={false} activeDot={{ r: 4, strokeWidth: 0 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          // ── Normal mode: single area ───────────────────────────────────────
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={displayData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="portGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={portColor} stopOpacity={0.15} />
+                  <stop offset="95%" stopColor={portColor} stopOpacity={0}    />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+              <XAxis dataKey="t" type="number" scale="time" domain={['dataMin', 'dataMax']}
                 tickFormatter={(ts) => formatXAxis(ts, period)}
                 tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} minTickGap={40}
               />
               <YAxis
-                tickFormatter={viewMode === 'pct'
-                  ? (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
-                  : formatDKK}
+                tickFormatter={viewMode === 'pct' ? fmtPctTick : formatDKK}
                 tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false}
                 width={viewMode === 'pct' ? 52 : 44}
               />
@@ -224,8 +313,7 @@ export default function PortfolioChart({ holdings, rates }) {
                 }
                 contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' }}
               />
-              <Area
-                type="monotone" dataKey="v" stroke={color} strokeWidth={2}
+              <Area type="monotone" dataKey="v" stroke={portColor} strokeWidth={2}
                 fill="url(#portGrad)" dot={false} activeDot={{ r: 4, strokeWidth: 0 }}
               />
             </AreaChart>

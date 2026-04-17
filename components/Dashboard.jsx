@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import dynamic from 'next/dynamic';
 
 const PortfolioChart  = dynamic(() => import('./PortfolioChart'),  { ssr: false });
-const BenchmarkChart  = dynamic(() => import('./BenchmarkChart'),  { ssr: false });
 
 function fmt(amount, currency) {
   if (amount == null || isNaN(amount)) return '—';
@@ -99,6 +98,7 @@ export default function Dashboard() {
     type: 'stock',
     symbol: '', shares: '', avgBuyPrice: '',
     sectors: [], annualDividend: '',
+    buyDate: '', sellDate: '',
     name: '', invested: '', currency: 'DKK', startDate: '',
   });
   const [formError, setFormError] = useState('');
@@ -106,6 +106,8 @@ export default function Dashboard() {
   // { clId, amount, date } — open payment form for a crowdlending row
   const [paymentForm, setPaymentForm] = useState(null);
   const [paymentError, setPaymentError] = useState('');
+  const [dividendForm, setDividendForm] = useState(null);
+  const [dividendError, setDividendError] = useState('');
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-beholdninger');
@@ -205,11 +207,13 @@ export default function Dashboard() {
         symbol, shares, avgBuyPrice, type: form.type,
         sectors: form.sectors.length ? form.sectors : undefined,
         annualDividend: annualDividend > 0 ? annualDividend : undefined,
+        buyDate: form.buyDate || undefined,
+        sellDate: form.sellDate || undefined,
       };
       if (editingId) {
         setHoldings((prev) => prev.map((h) => h.id === editingId ? { ...h, ...patch } : h));
       } else {
-        setHoldings((prev) => [...prev, { id: `${symbol}-${Date.now()}`, ...patch }]);
+        setHoldings((prev) => [...prev, { id: `${symbol}-${Date.now()}`, ...patch, dividends: [] }]);
       }
     }
 
@@ -217,6 +221,7 @@ export default function Dashboard() {
     setForm((f) => ({
       type: f.type,
       symbol: '', shares: '', avgBuyPrice: '', sectors: [], annualDividend: '',
+      buyDate: '', sellDate: '',
       name: '', invested: '', currency: 'DKK', startDate: '',
     }));
     setFormError('');
@@ -244,6 +249,8 @@ export default function Dashboard() {
         avgBuyPrice: String(h.avgBuyPrice ?? ''),
         sectors: h.sectors || (h.sector ? [h.sector] : []),
         annualDividend: String(h.annualDividend ?? ''),
+        buyDate: h.buyDate || '',
+        sellDate: h.sellDate || '',
         name: '', invested: '', currency: 'DKK', startDate: '',
       });
     }
@@ -273,6 +280,28 @@ export default function Dashboard() {
     setPaymentError('');
   };
 
+  const openDividendForm = (holdingId, currency) => {
+    const today = new Date().toISOString().split('T')[0];
+    setDividendForm({ holdingId, amount: '', date: today, currency });
+    setDividendError('');
+  };
+
+  const saveDividend = (e) => {
+    e.preventDefault();
+    const amount = parseFloat(dividendForm.amount.replace(',', '.'));
+    if (!amount || amount <= 0) return setDividendError('Beløb skal være større end 0');
+    if (!dividendForm.date) return setDividendError('Vælg en dato');
+    setHoldings((prev) =>
+      prev.map((h) =>
+        h.id === dividendForm.holdingId
+          ? { ...h, dividends: [...(h.dividends || []), { date: dividendForm.date, amount }] }
+          : h
+      )
+    );
+    setDividendForm(null);
+    setDividendError('');
+  };
+
   // Enrich each holding with live price data (+ DKK equivalents)
   const enriched = (holdings || []).filter(h => h.type !== 'crowdlending').map((h) => {
     // Normalise sectors: old data may have a single `sector` string
@@ -286,6 +315,8 @@ export default function Dashboard() {
     const gainLoss = currentValue !== null ? currentValue - invested : null;
     const gainLossPct =
       gainLoss !== null && invested > 0 ? (gainLoss / invested) * 100 : null;
+    const isSold = !!(h.sellDate && new Date(h.sellDate) < new Date());
+    const totalDividendsReceived = (h.dividends || []).reduce((s, d) => s + d.amount, 0);
     return {
       ...h,
       name: p?.name || h.symbol,
@@ -296,6 +327,7 @@ export default function Dashboard() {
       gainLoss,
       gainLossPct,
       dayChangePct: p?.changePercent ?? null,
+      isSold,
       // DKK equivalents
       dkkRate: rate,
       currentValueDKK: currentValue !== null ? currentValue * rate : null,
@@ -306,6 +338,8 @@ export default function Dashboard() {
         ? (h.annualDividend / currentPrice) * 100
         : null,
       annualDividendDKK: h.annualDividend ? h.annualDividend * h.shares * rate : 0,
+      totalDividendsReceived,
+      totalDividendsDKK: totalDividendsReceived * rate,
     };
   });
 
@@ -348,12 +382,14 @@ export default function Dashboard() {
     ? crowdlendingRows
     : [];
 
-  // Portfolio dividend yield (DKK)
-  const totalAnnualDividendDKK = enriched.reduce((s, h) => s + (h.annualDividendDKK || 0), 0);
+  // Portfolio dividend yield (DKK) — exclude sold positions
+  const totalAnnualDividendDKK = enriched.filter(h => !h.isSold).reduce((s, h) => s + (h.annualDividendDKK || 0), 0);
+  const totalDividendsReceivedDKK = enriched.reduce((s, h) => s + (h.totalDividendsDKK || 0), 0);
 
-  // Summary (stocks + crypto + crowdlending)
+  // Summary (stocks + crypto + crowdlending) — exclude sold positions
   const summary = {};
   for (const h of enriched) {
+    if (h.isSold) continue;
     if (val(h) === null) continue;
     const c = cur(h);
     if (!summary[c]) summary[c] = { value: 0, invested: 0 };
@@ -411,27 +447,41 @@ export default function Dashboard() {
                   <p className={`text-xl font-bold ${gainColor(gainPct)}`}>{fmtPct(gainPct)}</p>
                 </div>
               </div>{/* end grid */}
-              {/* Portfolio dividend yield — only shown when any holding has a dividend */}
-              {totalAnnualDividendDKK > 0 && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                      Årsudbytte (DKK)
-                    </p>
-                    <p className="text-xl font-bold text-indigo-600 tabular-nums">
-                      {fmt(totalAnnualDividendDKK, 'DKK')}
-                    </p>
-                  </div>
-                  <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                      Portefølje udbytte%
-                    </p>
-                    <p className="text-xl font-bold text-indigo-600 tabular-nums">
-                      {value > 0
-                        ? `${((totalAnnualDividendDKK / (showDKK ? value : value)) * 100).toFixed(2).replace('.', ',')}%`
-                        : '—'}
-                    </p>
-                  </div>
+              {/* Portfolio dividend summary */}
+              {(totalAnnualDividendDKK > 0 || totalDividendsReceivedDKK > 0) && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {totalAnnualDividendDKK > 0 && (
+                    <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                        Forventet årsudbytte
+                      </p>
+                      <p className="text-xl font-bold text-indigo-600 tabular-nums">
+                        {fmt(totalAnnualDividendDKK, 'DKK')}
+                      </p>
+                    </div>
+                  )}
+                  {totalAnnualDividendDKK > 0 && (
+                    <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                        Portefølje udbytte%
+                      </p>
+                      <p className="text-xl font-bold text-indigo-600 tabular-nums">
+                        {value > 0
+                          ? `${((totalAnnualDividendDKK / value) * 100).toFixed(2).replace('.', ',')}%`
+                          : '—'}
+                      </p>
+                    </div>
+                  )}
+                  {totalDividendsReceivedDKK > 0 && (
+                    <div className="bg-white rounded-xl border border-indigo-200 p-4 shadow-sm">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                        Modtaget udbytte i alt
+                      </p>
+                      <p className="text-xl font-bold text-indigo-600 tabular-nums">
+                        {fmt(totalDividendsReceivedDKK, 'DKK')}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
               </div>
@@ -440,11 +490,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Portfolio chart */}
+      {/* Portfolio chart (includes benchmark comparison) */}
       <PortfolioChart holdings={holdings || []} rates={dkkRates} />
-
-      {/* Benchmark comparison chart */}
-      <BenchmarkChart holdings={holdings || []} rates={dkkRates} />
 
       {/* Holdings card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -691,6 +738,24 @@ export default function Dashboard() {
                       className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                     />
                   </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Købsdato (valgfri)</label>
+                    <input
+                      type="date"
+                      value={form.buyDate}
+                      onChange={(e) => setForm((f) => ({ ...f, buyDate: e.target.value }))}
+                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Salgsdato (valgfri)</label>
+                    <input
+                      type="date"
+                      value={form.sellDate}
+                      onChange={(e) => setForm((f) => ({ ...f, sellDate: e.target.value }))}
+                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
                 </>
               )}
               <button
@@ -782,90 +847,126 @@ export default function Dashboard() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredEnriched.map((h) => (
-                    <tr
-                      key={h.id}
-                      className="hover:bg-gray-50 group transition-colors"
-                    >
-                      <td className="px-5 py-3.5">
-                        <div className="font-bold text-gray-900">{h.symbol}</div>
-                        <div className="text-xs text-gray-400 max-w-[160px] truncate">{h.name}</div>
-                        {h.sectors?.length > 0 && (
+                    <Fragment key={h.id}>
+                      <tr className={`hover:bg-gray-50 group transition-colors ${h.isSold ? 'opacity-60' : ''}`}>
+                        <td className="px-5 py-3.5">
+                          <div className="font-bold text-gray-900">{h.symbol}</div>
+                          <div className="text-xs text-gray-400 max-w-[160px] truncate">{h.name}</div>
                           <div className="flex flex-wrap gap-0.5 mt-0.5">
-                            {h.sectors.map((s) => (
+                            {h.isSold && (
+                              <span className="px-1.5 py-0 rounded text-[10px] font-semibold bg-red-100 text-red-600">
+                                SOLGT {h.sellDate}
+                              </span>
+                            )}
+                            {h.sectors?.map((s) => (
                               <span key={s} className="px-1.5 py-0 rounded text-[10px] font-semibold bg-gray-100 text-gray-500">
                                 {s}
                               </span>
                             ))}
                           </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
-                        {h.shares}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums text-gray-500">
-                        {fmt(h.avgBuyPrice, cur(h))}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums font-medium text-gray-900">
-                        {price(h) !== null ? (
-                          fmt(price(h), cur(h))
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums font-medium text-gray-900">
-                        {val(h) !== null ? (
-                          fmt(val(h), cur(h))
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                      <td
-                        className={`px-3 py-3.5 text-right tabular-nums font-semibold ${gainColor(gain(h))}`}
-                      >
-                        {gain(h) !== null ? (
-                          `${gain(h) >= 0 ? '+' : ''}${fmt(gain(h), cur(h))}`
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                      <td
-                        className={`px-3 py-3.5 text-right tabular-nums font-bold ${gainColor(h.gainLossPct)}`}
-                      >
-                        {h.gainLossPct !== null ? (
-                          fmtPct(h.gainLossPct)
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                      <td className={`px-3 py-3.5 text-right tabular-nums text-xs ${gainColor(h.dayChangePct)}`}>
-                        {h.dayChangePct !== null ? fmtPct(h.dayChangePct) : <span className="text-gray-300">—</span>}
-                      </td>
-                      <td className="px-3 py-3.5 text-right tabular-nums text-xs text-indigo-600 font-medium">
-                        {h.dividendYield != null ? `${h.dividendYield.toFixed(2).replace('.', ',')}%` : <span className="text-gray-200">—</span>}
-                      </td>
-                      <td className="px-3 py-3.5">
-                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                          <button
-                            onClick={() => startEdit(h)}
-                            aria-label={`Rediger ${h.symbol}`}
-                            className="w-7 h-7 rounded-full hover:bg-blue-50 flex items-center justify-center text-gray-300 hover:text-blue-500 transition-all"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => removeHolding(h.id)}
-                            aria-label={`Fjern ${h.symbol}`}
-                            className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="px-3 py-3.5 text-right tabular-nums text-gray-700">
+                          {h.shares}
+                        </td>
+                        <td className="px-3 py-3.5 text-right tabular-nums text-gray-500">
+                          {fmt(h.avgBuyPrice, cur(h))}
+                        </td>
+                        <td className="px-3 py-3.5 text-right tabular-nums font-medium text-gray-900">
+                          {price(h) !== null ? fmt(price(h), cur(h)) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-3 py-3.5 text-right tabular-nums font-medium text-gray-900">
+                          {val(h) !== null ? fmt(val(h), cur(h)) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className={`px-3 py-3.5 text-right tabular-nums font-semibold ${gainColor(gain(h))}`}>
+                          {gain(h) !== null ? `${gain(h) >= 0 ? '+' : ''}${fmt(gain(h), cur(h))}` : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className={`px-3 py-3.5 text-right tabular-nums font-bold ${gainColor(h.gainLossPct)}`}>
+                          {h.gainLossPct !== null ? fmtPct(h.gainLossPct) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className={`px-3 py-3.5 text-right tabular-nums text-xs ${gainColor(h.dayChangePct)}`}>
+                          {h.dayChangePct !== null ? fmtPct(h.dayChangePct) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-3 py-3.5 text-right tabular-nums text-xs text-indigo-600 font-medium">
+                          {h.dividendYield != null
+                            ? `${h.dividendYield.toFixed(2).replace('.', ',')}%`
+                            : <span className="text-gray-200">—</span>}
+                          {h.totalDividendsReceived > 0 && (
+                            <div className="text-[10px] text-green-600 font-normal">
+                              +{fmt(h.totalDividendsReceived, h.currency)} modtaget
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            {!h.isSold && (
+                              <button
+                                onClick={() => dividendForm?.holdingId === h.id ? setDividendForm(null) : openDividendForm(h.id, h.currency)}
+                                className="px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold whitespace-nowrap"
+                              >
+                                + Udbytte
+                              </button>
+                            )}
+                            <button
+                              onClick={() => startEdit(h)}
+                              aria-label={`Rediger ${h.symbol}`}
+                              className="w-7 h-7 rounded-full hover:bg-blue-50 flex items-center justify-center text-gray-300 hover:text-blue-500 transition-all"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => removeHolding(h.id)}
+                              aria-label={`Fjern ${h.symbol}`}
+                              className="w-7 h-7 rounded-full hover:bg-red-50 flex items-center justify-center text-gray-300 hover:text-red-500 transition-all"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {dividendForm?.holdingId === h.id && (
+                        <tr>
+                          <td colSpan={10} className="px-5 py-3 bg-indigo-50 border-b border-indigo-100">
+                            <form onSubmit={saveDividend} className="flex flex-wrap gap-2 items-end">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-xs font-medium text-gray-600">Dato</label>
+                                <input
+                                  type="date"
+                                  value={dividendForm.date}
+                                  onChange={(e) => setDividendForm((f) => ({ ...f, date: e.target.value }))}
+                                  className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-xs font-medium text-gray-600">
+                                  Udbytte modtaget ({dividendForm.currency})
+                                </label>
+                                <input
+                                  type="number"
+                                  placeholder="1250"
+                                  value={dividendForm.amount}
+                                  min="0"
+                                  step="any"
+                                  autoFocus
+                                  onChange={(e) => setDividendForm((f) => ({ ...f, amount: e.target.value }))}
+                                  className="w-32 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                                />
+                              </div>
+                              <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+                                Gem
+                              </button>
+                              <button type="button" onClick={() => { setDividendForm(null); setDividendError(''); }} className="px-3 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
+                                Annuller
+                              </button>
+                              {dividendError && <p className="w-full text-xs text-red-600 mt-1">{dividendError}</p>}
+                            </form>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -874,15 +975,26 @@ export default function Dashboard() {
             {/* Mobile cards */}
             <div className="sm:hidden divide-y divide-gray-100">
               {filteredEnriched.map((h) => (
-                <div key={h.id} className="px-4 py-4">
+                <div key={h.id} className={`px-4 py-4 ${h.isSold ? 'opacity-60' : ''}`}>
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <span className="font-bold text-base text-gray-900">{h.symbol}</span>
-                      <span className="text-xs text-gray-400 ml-2 align-middle">
-                        {h.name}
-                      </span>
+                      {h.isSold && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-600">
+                          SOLGT {h.sellDate}
+                        </span>
+                      )}
+                      <span className="text-xs text-gray-400 ml-2 align-middle">{h.name}</span>
                     </div>
                     <div className="flex items-center gap-1">
+                      {!h.isSold && (
+                        <button
+                          onClick={() => dividendForm?.holdingId === h.id ? setDividendForm(null) : openDividendForm(h.id, h.currency)}
+                          className="px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 text-xs font-semibold"
+                        >
+                          + Udbytte
+                        </button>
+                      )}
                       <button onClick={() => startEdit(h)} aria-label={`Rediger ${h.symbol}`} className="p-1 text-gray-300 hover:text-blue-400 transition-colors">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -895,6 +1007,19 @@ export default function Dashboard() {
                       </button>
                     </div>
                   </div>
+                  {dividendForm?.holdingId === h.id && (
+                    <form onSubmit={saveDividend} className="flex gap-2 items-end mb-3 p-3 bg-indigo-50 rounded-lg">
+                      <div className="flex flex-col gap-1 flex-1">
+                        <label className="text-xs font-medium text-gray-600">Dato</label>
+                        <input type="date" value={dividendForm.date} onChange={(e) => setDividendForm((f) => ({ ...f, date: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
+                      </div>
+                      <div className="flex flex-col gap-1 flex-1">
+                        <label className="text-xs font-medium text-gray-600">Beløb ({dividendForm.currency})</label>
+                        <input type="number" placeholder="1250" value={dividendForm.amount} min="0" step="any" autoFocus onChange={(e) => setDividendForm((f) => ({ ...f, amount: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
+                      </div>
+                      <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg">Gem</button>
+                    </form>
+                  )}
                   <div className="grid grid-cols-2 gap-y-2 text-sm">
                     <span className="text-gray-500">Antal</span>
                     <span className="text-right font-medium text-gray-900">{h.shares}</span>
@@ -917,11 +1042,15 @@ export default function Dashboard() {
                       {h.gainLossPct !== null ? fmtPct(h.gainLossPct) : '—'}
                     </span>
                     <span className="text-gray-500">I dag</span>
-                    <span
-                      className={`text-right text-xs font-medium ${gainColor(h.dayChangePct)}`}
-                    >
+                    <span className={`text-right text-xs font-medium ${gainColor(h.dayChangePct)}`}>
                       {h.dayChangePct !== null ? fmtPct(h.dayChangePct) : '—'}
                     </span>
+                    {h.totalDividendsReceived > 0 && (
+                      <>
+                        <span className="text-gray-500">Modtaget udbytte</span>
+                        <span className="text-right font-medium text-green-600">+{fmt(h.totalDividendsReceived, h.currency)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
