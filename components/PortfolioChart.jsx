@@ -59,6 +59,7 @@ export default function PortfolioChart({ holdings, rates }) {
       ...tradable.map((h) => h.symbol),
       ...(benchmarkSymbol ? [benchmarkSymbol] : []),
     ])];
+    setFetchedHistory({});   // clear stale data immediately to prevent flash
     setLoading(true);
     setError(null);
     try {

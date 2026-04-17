@@ -103,79 +103,31 @@ export default function Home() {
           <div className="pt-4 pb-0 flex items-center justify-between">
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">Aktiepanel</h1>
           </div>
-          <nav className="flex gap-1 mt-1 -mb-px" role="tablist">
-            {/* Portefølje tab */}
-            <button
-              role="tab"
-              aria-selected={activeTab === 'dashboard'}
-              onClick={() => handleTabClick('dashboard')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'dashboard'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Portefølje
-            </button>
-
-            {/* Allokering tab */}
-            <button
-              role="tab"
-              aria-selected={activeTab === 'allokering'}
-              onClick={() => handleTabClick('allokering')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'allokering'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Allokering
-            </button>
-
-            {/* Nyheder tab with optional blue dot */}
-            <button
-              role="tab"
-              aria-selected={activeTab === 'nyheder'}
-              onClick={() => handleTabClick('nyheder')}
-              className={`relative px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'nyheder'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Nyheder
-              {showNewsBadge && activeTab !== 'nyheder' && (
-                <span className="absolute top-2 right-1 w-2 h-2 rounded-full bg-blue-500" />
-              )}
-            </button>
-
-            {/* Kalender tab */}
-            <button
-              role="tab"
-              aria-selected={activeTab === 'kalender'}
-              onClick={() => handleTabClick('kalender')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'kalender'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Kalender
-            </button>
-
-            {/* Screener tab */}
-            <button
-              role="tab"
-              aria-selected={activeTab === 'screener'}
-              onClick={() => handleTabClick('screener')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'screener'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Screener
-            </button>
+          <nav className="flex gap-1 mt-1 -mb-px overflow-x-auto scrollbar-none" role="tablist">
+            {[
+              { id: 'dashboard',  label: 'Portefølje' },
+              { id: 'allokering', label: 'Allokering' },
+              { id: 'nyheder',    label: 'Nyheder',   badge: showNewsBadge },
+              { id: 'kalender',   label: 'Kalender' },
+              { id: 'screener',   label: 'Screener' },
+            ].map(({ id, label, badge }) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={activeTab === id}
+                onClick={() => handleTabClick(id)}
+                className={`relative flex-shrink-0 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  activeTab === id
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                {label}
+                {badge && activeTab !== id && (
+                  <span className="absolute top-2 right-0.5 w-2 h-2 rounded-full bg-blue-500" />
+                )}
+              </button>
+            ))}
           </nav>
         </div>
       </header>
