@@ -72,9 +72,11 @@ function buildChartData(history, holdings, crowdlending, rates) {
     for (const cl of crowdlending) {
       const startTs = new Date(cl.startDate || cl.buyDate || '2020-01-01').getTime() / 1000;
       if (ts < startTs) continue;
-      const months = (ts - startTs) / (30.44 * 86400);
       const rate = rates[cl.currency || 'DKK'] ?? 1;
-      value += (cl.invested + cl.monthlyReturn * months) * rate;
+      const interest = (cl.payments || [])
+        .filter((p) => new Date(p.date).getTime() / 1000 <= ts)
+        .reduce((sum, p) => sum + p.amount, 0);
+      value += (cl.invested + interest) * rate;
     }
 
     return { t: ts * 1000, v: Math.round(value) };

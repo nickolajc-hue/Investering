@@ -55,18 +55,26 @@ export default function Home() {
   // Timestamp (ms) of when the user last viewed the news tab.
   // 0 = never visited → all articles are "new".
   const [lastNewsCheck, setLastNewsCheck] = useState(null);
+  // Holds the check time FROM THE PREVIOUS visit — used to mark articles as new.
+  // lastNewsCheck is updated to "now" on tab click (clears the badge), but prevNewsCheck
+  // keeps the old value so articles published after the previous visit show as new.
+  const [prevNewsCheck, setPrevNewsCheck] = useState(0);
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
     const stored = localStorage.getItem('last-news-check');
-    setLastNewsCheck(stored ? parseInt(stored, 10) : 0);
+    const val = stored ? parseInt(stored, 10) : 0;
+    setLastNewsCheck(val);
+    setPrevNewsCheck(val);
   }, []);
 
   const handleTabClick = (id) => {
     setActiveTab(id);
     if (id === 'nyheder') {
+      // Capture old value so articles after last visit show as new this visit
+      setPrevNewsCheck(lastNewsCheck ?? 0);
       const now = Date.now();
       setLastNewsCheck(now);
       localStorage.setItem('last-news-check', String(now));
@@ -136,7 +144,7 @@ export default function Home() {
 
       {activeTab === 'dashboard'  && <Dashboard />}
       {activeTab === 'allokering' && <AllocationView />}
-      {activeTab === 'nyheder'    && <NewsFeed lastNewsCheck={lastNewsCheck ?? 0} />}
+      {activeTab === 'nyheder'    && <NewsFeed lastNewsCheck={prevNewsCheck} />}
 
       <InstallHint />
     </div>

@@ -78,7 +78,7 @@ function DiffBadge({ diff }) {
   );
 }
 
-function StrategyCard({ strategy, allHoldings, prices, rates, onChange, onDelete }) {
+function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = [], onChange, onDelete }) {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal]         = useState(strategy.name);
   const [showAddBucket, setShowAddBucket] = useState(false);
@@ -339,7 +339,7 @@ function StrategyCard({ strategy, allHoldings, prices, rates, onChange, onDelete
               <div>
                 <p className="text-xs font-medium text-gray-600 mb-1">Type / Sektor (vælg hvad der hører til)</p>
                 <div className="flex flex-wrap gap-1">
-                  {ALL_TAGS.map((tag) => (
+                  {[...ALL_TAGS, ...customSectors].map((tag) => (
                     <button
                       key={tag}
                       type="button"
@@ -379,6 +379,7 @@ export default function AllocationView() {
   const [rates,    setRates]    = useState({ DKK: 1, USD: 6.9 });
   const [strategies, setStrategies] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [customSectors, setCustomSectors] = useState([]);
 
   // Load from localStorage
   useEffect(() => {
@@ -388,6 +389,9 @@ export default function AllocationView() {
     const s = localStorage.getItem('allocation-strategies');
     try { setStrategies(s ? JSON.parse(s) : [DEFAULT_STRATEGY()]); }
     catch { setStrategies([DEFAULT_STRATEGY()]); }
+
+    const cs = localStorage.getItem('custom-sectors');
+    try { if (cs) setCustomSectors(JSON.parse(cs)); } catch {}
   }, []);
 
   // Persist strategies
@@ -483,6 +487,7 @@ export default function AllocationView() {
             allHoldings={holdings}
             prices={prices}
             rates={rates}
+            customSectors={customSectors}
             onChange={updateStrategy}
             onDelete={() => deleteStrategy(s.id)}
           />
