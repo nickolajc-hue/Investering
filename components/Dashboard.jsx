@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import dynamic from 'next/dynamic';
 
-const PortfolioChart    = dynamic(() => import('./PortfolioChart'),    { ssr: false });
-const EarningsCalendar  = dynamic(() => import('./EarningsCalendar'),  { ssr: false });
+const PortfolioChart  = dynamic(() => import('./PortfolioChart'),  { ssr: false });
 
 function fmt(amount, currency) {
   if (amount == null || isNaN(amount)) return '—';
@@ -111,6 +110,8 @@ export default function Dashboard() {
   const [dividendError, setDividendError] = useState('');
   const [editingDividendKey, setEditingDividendKey] = useState(null); // {holdingId, index}
   const [editDividendForm, setEditDividendForm] = useState({ date: '', amount: '' });
+  const [editingPaymentKey, setEditingPaymentKey] = useState(null); // {clId, index}
+  const [editPaymentForm, setEditPaymentForm] = useState({ date: '', amount: '' });
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-beholdninger');
@@ -334,6 +335,37 @@ export default function Dashboard() {
       )
     );
     setEditingDividendKey(null);
+  };
+
+  const startEditPayment = (clId, index, p) => {
+    setEditingPaymentKey({ clId, index });
+    setEditPaymentForm({ date: p.date, amount: String(p.amount) });
+  };
+
+  const saveEditPayment = (e) => {
+    e.preventDefault();
+    const amount = parseFloat(editPaymentForm.amount.replace(',', '.'));
+    if (!amount || amount <= 0) return;
+    const { clId, index } = editingPaymentKey;
+    setHoldings((prev) =>
+      prev.map((h) =>
+        h.id === clId
+          ? { ...h, payments: (h.payments || []).map((p, i) => i === index ? { date: editPaymentForm.date, amount } : p) }
+          : h
+      )
+    );
+    setEditingPaymentKey(null);
+  };
+
+  const deletePayment = (clId, index) => {
+    setHoldings((prev) =>
+      prev.map((h) =>
+        h.id === clId
+          ? { ...h, payments: (h.payments || []).filter((_, i) => i !== index) }
+          : h
+      )
+    );
+    setEditingPaymentKey(null);
   };
 
   // Enrich each holding with live price data (+ DKK equivalents)
@@ -1244,40 +1276,75 @@ export default function Dashboard() {
                         </tr>
                         {isOpen && (
                           <tr key={`${cl.id}-payment`}>
-                            <td colSpan={7} className="px-5 py-3 bg-green-50 border-b border-green-100">
-                              <form onSubmit={savePayment} className="flex flex-wrap gap-2 items-end">
-                                <div className="flex flex-col gap-1">
-                                  <label className="text-xs font-medium text-gray-600">Dato</label>
-                                  <input
-                                    type="date"
-                                    value={paymentForm.date}
-                                    onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
-                                    className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
-                                  />
+                            <td colSpan={7} className="px-5 py-4 bg-green-50 border-b border-green-100">
+                              {/* Existing payments list */}
+                              {cl.payments.length > 0 && (
+                                <div className="mb-4">
+                                  <p className="text-xs font-semibold text-green-800 mb-2 uppercase tracking-wider">
+                                    Registrerede renter · {cl.name}
+                                  </p>
+                                  <div className="space-y-1.5">
+                                    {[...cl.payments]
+                                      .map((p, i) => ({ ...p, origIdx: i }))
+                                      .sort((a, b) => b.date.localeCompare(a.date))
+                                      .map((p) => (
+                                        editingPaymentKey?.clId === cl.id && editingPaymentKey?.index === p.origIdx ? (
+                                          <form key={p.origIdx} onSubmit={saveEditPayment} className="flex items-end gap-2 flex-wrap">
+                                            <input type="date" value={editPaymentForm.date}
+                                              onChange={(e) => setEditPaymentForm((f) => ({ ...f, date: e.target.value }))}
+                                              className="px-2 py-1 text-xs border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                                            />
+                                            <input type="number" value={editPaymentForm.amount} step="any" min="0" autoFocus
+                                              onChange={(e) => setEditPaymentForm((f) => ({ ...f, amount: e.target.value }))}
+                                              className="w-28 px-2 py-1 text-xs border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                                            />
+                                            <button type="submit" className="px-2.5 py-1 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700">Gem</button>
+                                            <button type="button" onClick={() => setEditingPaymentKey(null)} className="px-2.5 py-1 text-xs text-gray-600 rounded-lg hover:bg-gray-100">Annuller</button>
+                                          </form>
+                                        ) : (
+                                          <div key={p.origIdx} className="flex items-center gap-3">
+                                            <span className="text-xs text-gray-500 w-24 tabular-nums">{p.date}</span>
+                                            <span className="text-sm font-semibold text-green-700 tabular-nums">
+                                              +{new Intl.NumberFormat('da-DK', { style: 'currency', currency: cl.currency, minimumFractionDigits: 2 }).format(p.amount)}
+                                            </span>
+                                            <button onClick={() => startEditPayment(cl.id, p.origIdx, p)} className="text-xs text-gray-400 hover:text-blue-600 transition-colors">Rediger</button>
+                                            <button onClick={() => deletePayment(cl.id, p.origIdx)} className="text-xs text-gray-400 hover:text-red-600 transition-colors">Slet</button>
+                                          </div>
+                                        )
+                                      ))}
+                                  </div>
+                                  <hr className="mt-3 mb-3 border-green-200" />
                                 </div>
-                                <div className="flex flex-col gap-1">
-                                  <label className="text-xs font-medium text-gray-600">
-                                    Rente udbetalt ({cl.currency})
-                                  </label>
-                                  <input
-                                    type="number"
-                                    placeholder="450"
-                                    value={paymentForm.amount}
-                                    min="0"
-                                    step="any"
-                                    autoFocus
-                                    onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
-                                    className="w-28 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
-                                  />
-                                </div>
-                                <button type="submit" className="px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">
-                                  Gem
-                                </button>
-                                <button type="button" onClick={() => { setPaymentForm(null); setPaymentError(''); }} className="px-3 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
-                                  Annuller
-                                </button>
-                                {paymentError && <p className="w-full text-xs text-red-600 mt-1">{paymentError}</p>}
-                              </form>
+                              )}
+                              {/* Add new */}
+                              {!editingPaymentKey && (
+                                <form onSubmit={savePayment} className="flex flex-wrap gap-2 items-end">
+                                  <p className="w-full text-xs font-semibold text-green-800 uppercase tracking-wider mb-1">
+                                    Tilføj ny renteudbetaling
+                                  </p>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs font-medium text-gray-600">Dato</label>
+                                    <input type="date" value={paymentForm.date}
+                                      onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
+                                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs font-medium text-gray-600">Rente udbetalt ({cl.currency})</label>
+                                    <input type="number" placeholder="450" value={paymentForm.amount} min="0" step="any"
+                                      onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
+                                      className="w-28 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                                    />
+                                  </div>
+                                  <button type="submit" className="px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">Tilføj</button>
+                                  <button type="button" onClick={() => { setPaymentForm(null); setPaymentError(''); setEditingPaymentKey(null); }}
+                                    className="px-3 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+                                  >
+                                    Luk
+                                  </button>
+                                  {paymentError && <p className="w-full text-xs text-red-600 mt-1">{paymentError}</p>}
+                                </form>
+                              )}
                             </td>
                           </tr>
                         )}
@@ -1318,17 +1385,50 @@ export default function Dashboard() {
                       </div>
                     </div>
                     {isOpen && (
-                      <form onSubmit={savePayment} className="flex gap-2 items-end mb-3 p-3 bg-green-50 rounded-lg">
-                        <div className="flex flex-col gap-1 flex-1">
-                          <label className="text-xs font-medium text-gray-600">Dato</label>
-                          <input type="date" value={paymentForm.date} onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
-                        </div>
-                        <div className="flex flex-col gap-1 flex-1">
-                          <label className="text-xs font-medium text-gray-600">Beløb ({cl.currency})</label>
-                          <input type="number" placeholder="450" value={paymentForm.amount} min="0" step="any" autoFocus onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
-                        </div>
-                        <button type="submit" className="px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg">Gem</button>
-                      </form>
+                      <div className="mb-3 p-3 bg-green-50 rounded-lg space-y-3">
+                        {cl.payments.length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-green-800 mb-2">Registrerede renter</p>
+                            <div className="space-y-2">
+                              {[...cl.payments]
+                                .map((p, i) => ({ ...p, origIdx: i }))
+                                .sort((a, b) => b.date.localeCompare(a.date))
+                                .map((p) => (
+                                  editingPaymentKey?.clId === cl.id && editingPaymentKey?.index === p.origIdx ? (
+                                    <form key={p.origIdx} onSubmit={saveEditPayment} className="flex gap-2 items-center">
+                                      <input type="date" value={editPaymentForm.date} onChange={(e) => setEditPaymentForm((f) => ({ ...f, date: e.target.value }))} className="flex-1 px-2 py-1 text-xs border rounded-lg bg-white" />
+                                      <input type="number" value={editPaymentForm.amount} step="any" min="0" onChange={(e) => setEditPaymentForm((f) => ({ ...f, amount: e.target.value }))} className="w-20 px-2 py-1 text-xs border rounded-lg bg-white" />
+                                      <button type="submit" className="px-2 py-1 bg-green-600 text-white text-xs rounded-lg">Gem</button>
+                                      <button type="button" onClick={() => setEditingPaymentKey(null)} className="px-2 py-1 text-xs text-gray-600 rounded-lg">✕</button>
+                                    </form>
+                                  ) : (
+                                    <div key={p.origIdx} className="flex items-center gap-2">
+                                      <span className="text-xs text-gray-500 w-20 tabular-nums">{p.date}</span>
+                                      <span className="text-xs font-semibold text-green-700 flex-1">+{p.amount.toLocaleString('da-DK')} {cl.currency}</span>
+                                      <button onClick={() => startEditPayment(cl.id, p.origIdx, p)} className="text-xs text-blue-500">Rediger</button>
+                                      <button onClick={() => deletePayment(cl.id, p.origIdx)} className="text-xs text-red-500">Slet</button>
+                                    </div>
+                                  )
+                                ))}
+                            </div>
+                            <hr className="mt-2 border-green-200" />
+                          </div>
+                        )}
+                        {!editingPaymentKey && (
+                          <form onSubmit={savePayment} className="flex gap-2 items-end">
+                            <div className="flex flex-col gap-1 flex-1">
+                              <label className="text-xs font-medium text-gray-600">Dato</label>
+                              <input type="date" value={paymentForm.date} onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))} className="px-2 py-1.5 text-xs border border-gray-300 rounded-lg bg-white w-full" />
+                            </div>
+                            <div className="flex flex-col gap-1 flex-1">
+                              <label className="text-xs font-medium text-gray-600">Beløb ({cl.currency})</label>
+                              <input type="number" placeholder="450" value={paymentForm.amount} min="0" step="any" onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))} className="px-2 py-1.5 text-xs border border-gray-300 rounded-lg bg-white w-full" />
+                            </div>
+                            <button type="submit" className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg">Tilføj</button>
+                            <button type="button" onClick={() => { setPaymentForm(null); setEditingPaymentKey(null); }} className="px-2 py-1.5 text-xs text-gray-600 rounded-lg">Luk</button>
+                          </form>
+                        )}
+                      </div>
                     )}
                     <div className="grid grid-cols-2 gap-y-2 text-sm">
                       <span className="text-gray-500">Investeret</span>
@@ -1349,9 +1449,6 @@ export default function Dashboard() {
           )}
         </div>
       )}
-
-      {/* Earnings calendar */}
-      <EarningsCalendar holdings={holdings || []} />
 
       {/* Footer note */}
       {Object.keys(summary).length > 0 && (
