@@ -108,20 +108,21 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
   });
   const [formErr, setFormErr] = useState('');
 
-  // Assign each holding to the FIRST bucket whose tags overlap its effective tags
+  // Assign each holding to the FIRST bucket whose tags overlap its effective tags.
+  // Only assigned holdings count toward totalDKK so percentages reflect the strategy.
   let totalDKK = 0;
   const bucketValues = {};
   const assignedIds = new Set();
   for (const h of allHoldings) {
     const v = holdingDKK(h, prices, rates);
     if (v == null) continue;
-    totalDKK += v;
     const tags = effectiveTags(h);
     for (const b of strategy.buckets) {
       if (b.tags.some((t) => tags.includes(t))) {
         bucketValues[b.id] = (bucketValues[b.id] ?? 0) + v;
         assignedIds.add(h.id);
-        break; // first match only — no double-counting
+        totalDKK += v; // only count holdings that match a bucket
+        break;
       }
     }
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   AreaChart,
   Area,
@@ -33,15 +33,18 @@ function formatDKK(v) {
   return `${v.toFixed(0)}`;
 }
 
+function formatPct(v) {
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1).replace('.', ',')}%`;
+}
+
 // Build chart points from historical data
 function buildChartData(history, holdings, crowdlending, rates) {
   const tradable = holdings.filter(
     (h) => h.type === 'stock' || h.type === 'crypto' || !h.type
   );
 
-  // Collect all timestamps
   const allTs = new Set();
-  const priceAt = {}; // { symbol -> { ts -> price } }
+  const priceAt = {};
 
   for (const [sym, data] of Object.entries(history)) {
     priceAt[sym] = {};
@@ -54,7 +57,7 @@ function buildChartData(history, holdings, crowdlending, rates) {
   const sorted = [...allTs].sort((a, b) => a - b);
   if (sorted.length === 0) return [];
 
-  const lastSeen = {}; // forward-fill missing prices
+  const lastSeen = {};
 
   return sorted.map((ts) => {
     let value = 0;
@@ -85,6 +88,7 @@ function buildChartData(history, holdings, crowdlending, rates) {
 
 export default function PortfolioChart({ holdings, rates }) {
   const [period, setPeriod] = useState('1mo');
+  const [viewMode, setViewMode] = useState('dkk'); // 'dkk' | 'pct'
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -97,11 +101,9 @@ export default function PortfolioChart({ holdings, rates }) {
   const loadChart = useCallback(
     async (p) => {
       if (!holdings || holdings.length === 0) return;
-
       const symbols = [...new Set(tradable.map((h) => h.symbol))];
       setLoading(true);
       setError(null);
-
       try {
         let history = {};
         if (symbols.length > 0) {
@@ -109,10 +111,9 @@ export default function PortfolioChart({ holdings, rates }) {
           const json = await res.json();
           history = json.history || {};
         }
-
         const data = buildChartData(history, tradable, crowdlending, rates || {});
         setChartData(data);
-      } catch (e) {
+      } catch {
         setError('Kunne ikke hente historik');
       } finally {
         setLoading(false);
@@ -122,9 +123,17 @@ export default function PortfolioChart({ holdings, rates }) {
     [JSON.stringify(holdings), JSON.stringify(rates)]
   );
 
-  useEffect(() => {
-    loadChart(period);
-  }, [loadChart, period]);
+  useEffect(() => { loadChart(period); }, [loadChart, period]);
+
+  // Derive display data: pct mode normalises to first positive value = 0%
+  const displayData = useMemo(() => {
+    if (viewMode === 'dkk' || chartData.length === 0) return chartData;
+    const base = chartData.find((d) => d.v > 0)?.v ?? 1;
+    return chartData.map((d) => ({
+      t: d.t,
+      v: base > 0 ? ((d.v - base) / base) * 100 : 0,
+    }));
+  }, [chartData, viewMode]);
 
   const first = chartData[0]?.v ?? 0;
   const last  = chartData[chartData.length - 1]?.v ?? 0;
@@ -156,21 +165,48 @@ export default function PortfolioChart({ holdings, rates }) {
           )}
         </div>
 
-        {/* Period selector */}
-        <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-          {PERIODS.map((p) => (
+        {/* Controls: view mode + period */}
+        <div className="flex flex-col items-end gap-2">
+          {/* kr. / % toggle */}
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
             <button
-              key={p.value}
-              onClick={() => setPeriod(p.value)}
+              onClick={() => setViewMode('dkk')}
               className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
-                period === p.value
+                viewMode === 'dkk'
                   ? 'bg-white text-gray-900 shadow-sm'
                   : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              {p.label}
+              kr.
             </button>
-          ))}
+            <button
+              onClick={() => setViewMode('pct')}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                viewMode === 'pct'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              %
+            </button>
+          </div>
+
+          {/* Period selector */}
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+            {PERIODS.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => setPeriod(p.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                  period === p.value
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -184,13 +220,13 @@ export default function PortfolioChart({ holdings, rates }) {
           <div className="h-full flex items-center justify-center text-sm text-amber-600">
             {error}
           </div>
-        ) : chartData.length < 2 ? (
+        ) : displayData.length < 2 ? (
           <div className="h-full flex items-center justify-center text-sm text-gray-400">
             Ikke nok data til at vise graf
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <AreaChart data={displayData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%"  stopColor={color} stopOpacity={0.15} />
@@ -210,14 +246,18 @@ export default function PortfolioChart({ holdings, rates }) {
                 minTickGap={40}
               />
               <YAxis
-                tickFormatter={formatDKK}
+                tickFormatter={viewMode === 'pct' ? formatPct : formatDKK}
                 tick={{ fontSize: 10, fill: '#9ca3af' }}
                 tickLine={false}
                 axisLine={false}
-                width={44}
+                width={viewMode === 'pct' ? 52 : 44}
               />
               <Tooltip
-                formatter={(v) => [`${v.toLocaleString('da-DK')} kr.`, 'Kursværdi']}
+                formatter={(v) =>
+                  viewMode === 'pct'
+                    ? [`${v >= 0 ? '+' : ''}${v.toFixed(2).replace('.', ',')}%`, 'Stigning']
+                    : [`${Math.round(v).toLocaleString('da-DK')} kr.`, 'Kursværdi']
+                }
                 labelFormatter={(ts) =>
                   new Date(ts).toLocaleDateString('da-DK', {
                     day: 'numeric', month: 'short', year: 'numeric',
