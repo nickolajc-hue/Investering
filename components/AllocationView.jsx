@@ -66,15 +66,36 @@ function fmtPct(n) {
 
 // ── sub-components ────────────────────────────────────────────────────────────
 
-function DiffBadge({ diff }) {
+function DiffBadge({ diff, diffDKK }) {
   if (diff == null) return null;
   const abs = Math.abs(diff);
-  if (abs < 0.5) return <span className="text-xs text-gray-400">≈ mål</span>;
   const pos = diff > 0;
+  const absDKK = diffDKK != null ? Math.round(Math.abs(diffDKK)) : null;
+
+  if (abs < 0.5) {
+    return (
+      <div className="text-right leading-tight">
+        <span className="text-xs text-gray-400">≈ mål</span>
+        {absDKK != null && absDKK >= 10 && (
+          <div className="text-xs text-gray-300 tabular-nums">
+            {pos ? '+' : '-'}{absDKK.toLocaleString('da-DK')} kr.
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <span className={`text-xs font-semibold ${pos ? 'text-green-600' : 'text-red-500'}`}>
-      {pos ? '+' : ''}{diff.toFixed(1).replace('.', ',')}%
-    </span>
+    <div className="text-right leading-tight">
+      <span className={`text-xs font-semibold ${pos ? 'text-green-600' : 'text-red-500'}`}>
+        {pos ? '+' : ''}{diff.toFixed(1).replace('.', ',')}%
+      </span>
+      {absDKK != null && (
+        <div className={`text-xs tabular-nums ${pos ? 'text-green-500' : 'text-red-400'}`}>
+          {pos ? '+' : '-'}{absDKK.toLocaleString('da-DK')} kr.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -109,7 +130,8 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
     const value = bucketValues[b.id] ?? 0;
     const currentPct = totalDKK > 0 ? (value / totalDKK) * 100 : 0;
     const diff = currentPct - b.target;
-    return { ...b, value, currentPct, diff };
+    const diffDKK = totalDKK > 0 ? value - (totalDKK * b.target / 100) : null;
+    return { ...b, value, currentPct, diff, diffDKK };
   });
 
   // Holdings not matched by any bucket
@@ -269,7 +291,7 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
                     {b.currentPct.toFixed(1).replace('.', ',')}%
                   </td>
                   <td className="py-2.5 text-right">
-                    <DiffBadge diff={b.diff} />
+                    <DiffBadge diff={b.diff} diffDKK={b.diffDKK} />
                   </td>
                   <td className="py-2.5 text-right">
                     <button
