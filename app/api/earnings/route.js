@@ -17,7 +17,6 @@ let _crumbExpiry = 0;
 async function getAuth() {
   if (_crumb && Date.now() < _crumbExpiry) return { crumb: _crumb, cookies: _cookies };
 
-  // Step 1: get session cookie from Yahoo Finance main page
   const sessionRes = await fetch('https://finance.yahoo.com/', {
     headers: {
       'User-Agent': HEADERS['User-Agent'],
@@ -34,7 +33,6 @@ async function getAuth() {
     cookieStr = raw.map((c) => c.split(';')[0]).join('; ');
   }
 
-  // Step 2: fetch crumb
   const crumbRes = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
     headers: { ...HEADERS, Cookie: cookieStr },
     signal: AbortSignal.timeout(5000),
@@ -45,17 +43,16 @@ async function getAuth() {
 
   _crumb = crumb;
   _cookies = cookieStr;
-  _crumbExpiry = Date.now() + 55 * 60 * 1000; // 55 min
+  _crumbExpiry = Date.now() + 55 * 60 * 1000;
   return { crumb, cookies: cookieStr };
 }
 
-// ── Strategy 1: chart endpoint (same path as /api/history — known to work) ───
+// ── Strategy 1: chart with range=1y (same pattern as working history route) ───
 async function fetchViaChart(symbol) {
   const now = Math.floor(Date.now() / 1000);
-  const future = now + 365 * 86400;
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${now - 86400}&period2=${future}&interval=1mo&events=earnings,dividends`;
-  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1mo&events=earnings,dividends&includePrePost=false`;
+  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(8000) }).catch(() => null);
+  if (!res?.ok) return null;
   const data = await res.json();
   const result = data?.chart?.result?.[0];
   if (!result) return null;
@@ -63,29 +60,30 @@ async function fetchViaChart(symbol) {
   const meta = result.meta ?? {};
   const events = result.events ?? {};
 
-  // Earnings: prefer earningsTimestampsStart (next expected window)
+  // Gather all upcoming earnings timestamps from meta fields
   const eStart = meta.earningsTimestampsStart;
   const eEnd   = meta.earningsTimestampsEnd;
-  // Also check timestamps array for upcoming ones
-  const allEts = (meta.earningsTimestamps ?? []).filter((t) => t > now);
+  const allEts = (meta.earningsTimestamps ?? []).filter((t) => t > now - 86400);
+
+  // Also from events.earnings (historical + future)
   const allEtsInEvents = Object.values(events.earnings ?? {})
     .map((e) => e.date ?? e.startdatets)
-    .filter((t) => t && t > now);
+    .filter((t) => t && t > now - 86400);
 
   const upcoming = [...new Set([...allEts, ...allEtsInEvents])].sort((a, b) => a - b);
 
   let earningsDate = null;
   let earningsDateEnd = null;
-  if (eStart && eStart > now) {
+  if (eStart && eStart > now - 86400) {
     earningsDate    = eStart * 1000;
-    earningsDateEnd = eEnd && eEnd > now ? eEnd * 1000 : null;
+    earningsDateEnd = eEnd && eEnd > now - 86400 ? eEnd * 1000 : null;
   } else if (upcoming.length > 0) {
-    earningsDate = upcoming[0] * 1000;
+    earningsDate    = upcoming[0] * 1000;
   }
 
-  // Ex-dividend from events (filter future only)
+  // Ex-dividend: include future ones (within 1 year)
   const futureDivs = Object.values(events.dividends ?? {})
-    .filter((d) => d.date > now)
+    .filter((d) => d.date > now - 86400)
     .sort((a, b) => a.date - b.date);
   const exDivDate = futureDivs[0]?.date ? futureDivs[0].date * 1000 : null;
 
@@ -100,8 +98,31 @@ async function fetchViaQuoteSummary(symbol) {
   const res = await fetch(url, {
     headers: { ...HEADERS, ...(auth ? { Cookie: auth.cookies } : {}) },
     signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) return null;
+  }).catch(() => null);
+  if (!res?.ok) return null;
+  const data = await res.json();
+  const cal = data?.quoteSummary?.result?.[0]?.calendarEvents;
+  if (!cal) return null;
+
+  const earningsDates = (cal.earnings?.earningsDate ?? []).map((d) => d.raw * 1000);
+  return {
+    symbol,
+    earningsDate:    earningsDates[0] ?? null,
+    earningsDateEnd: earningsDates[1] ?? null,
+    exDividendDate:  cal.exDividendDate?.raw ? cal.exDividendDate.raw * 1000 : null,
+  };
+}
+
+// ── Strategy 3: v11 quote endpoint ────────────────────────────────────────────
+async function fetchViaQuote(symbol) {
+  const auth = await getAuth();
+  const crumbQ = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
+  const url = `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=calendarEvents${crumbQ}`;
+  const res = await fetch(url, {
+    headers: { ...HEADERS, ...(auth ? { Cookie: auth.cookies } : {}) },
+    signal: AbortSignal.timeout(8000),
+  }).catch(() => null);
+  if (!res?.ok) return null;
   const data = await res.json();
   const cal = data?.quoteSummary?.result?.[0]?.calendarEvents;
   if (!cal) return null;
@@ -116,16 +137,16 @@ async function fetchViaQuoteSummary(symbol) {
 }
 
 async function fetchCalendarEvents(symbol) {
-  // Try chart endpoint first (no auth required)
-  const chart = await fetchViaChart(symbol).catch(() => null);
+  const chart = await fetchViaChart(symbol);
   if (chart?.earningsDate || chart?.exDividendDate) return chart;
 
-  // Fall back to quoteSummary with crumb
-  const qs = await fetchViaQuoteSummary(symbol).catch(() => null);
+  const qs = await fetchViaQuoteSummary(symbol);
   if (qs?.earningsDate || qs?.exDividendDate) return qs;
 
-  // Return partial result if we at least have a symbol
-  return chart ?? null;
+  const q11 = await fetchViaQuote(symbol);
+  if (q11?.earningsDate || q11?.exDividendDate) return q11;
+
+  return chart ?? qs ?? null;
 }
 
 export async function GET(request) {
