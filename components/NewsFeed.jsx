@@ -85,6 +85,15 @@ function SkeletonCard() {
   );
 }
 
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
 export default function NewsFeed({ lastNewsCheck = 0 }) {
   const [symbols, setSymbols] = useState(null);
   const [newSymbol, setNewSymbol] = useState('');
@@ -94,6 +103,8 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
   const [activeFilter, setActiveFilter] = useState('all');
   const [error, setError] = useState(null);
   const [readLinks, setReadLinks] = useState(new Set());
+  const [notifState, setNotifState] = useState('idle'); // 'idle'|'subscribed'|'loading'|'denied'
+  const [notifError, setNotifError] = useState('');
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-nyheder');
@@ -105,6 +116,66 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
     const savedRead = localStorage.getItem('news-read-links');
     if (savedRead) {
       try { setReadLinks(new Set(JSON.parse(savedRead))); } catch {}
+    }
+    // Check if already subscribed
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      navigator.serviceWorker.ready.then((reg) =>
+        reg.pushManager.getSubscription().then((sub) => {
+          if (sub) setNotifState('subscribed');
+        })
+      ).catch(() => {});
+    } else if (Notification.permission === 'denied') {
+      setNotifState('denied');
+    }
+  }, []);
+
+  const subscribe = useCallback(async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setNotifError('Din browser understøtter ikke push-notifikationer.');
+      return;
+    }
+    setNotifState('loading');
+    setNotifError('');
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setNotifState('denied');
+        setNotifError('Notifikationer er blokeret. Tillad dem i browserindstillinger.');
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON(), symbols: symbols || [] }),
+      });
+      setNotifState('subscribed');
+    } catch (err) {
+      setNotifState('idle');
+      setNotifError('Kunne ikke aktivere notifikationer. Prøv igen.');
+    }
+  }, [symbols]);
+
+  const unsubscribe = useCallback(async () => {
+    setNotifState('loading');
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch('/api/push/subscribe', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+        await sub.unsubscribe();
+      }
+      setNotifState('idle');
+    } catch {
+      setNotifState('subscribed');
     }
   }, []);
 
@@ -121,8 +192,21 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
   useEffect(() => {
     if (symbols !== null) {
       localStorage.setItem('aktie-nyheder', JSON.stringify(symbols));
+      // Keep push subscription's symbol list in sync
+      if (notifState === 'subscribed' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then((reg) =>
+          reg.pushManager.getSubscription().then((sub) => {
+            if (!sub) return;
+            fetch('/api/push/subscribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ subscription: sub.toJSON(), symbols }),
+            }).catch(() => {});
+          })
+        ).catch(() => {});
+      }
     }
-  }, [symbols]);
+  }, [symbols, notifState]);
 
   const fetchNews = useCallback(async (list) => {
     if (!list || list.length === 0) {
@@ -270,6 +354,39 @@ export default function NewsFeed({ lastNewsCheck = 0 }) {
             </svg>
           </button>
         </div>
+
+        {/* Notification toggle */}
+        {'Notification' in window && (
+          <div className="mt-3 flex items-center gap-2">
+            {notifState === 'subscribed' ? (
+              <button
+                onClick={unsubscribe}
+                className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-500 transition-colors"
+              >
+                <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zm0 16a2 2 0 002-2H8a2 2 0 002 2z" />
+                </svg>
+                Notifikationer aktiveret — klik for at deaktivere
+              </button>
+            ) : notifState === 'denied' ? (
+              <p className="text-xs text-amber-600">
+                Notifikationer er blokeret i din browser.
+              </p>
+            ) : (
+              <button
+                onClick={subscribe}
+                disabled={notifState === 'loading'}
+                className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-40 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {notifState === 'loading' ? 'Aktiverer…' : 'Aktiver notifikationer'}
+              </button>
+            )}
+            {notifError && <p className="text-xs text-red-500">{notifError}</p>}
+          </div>
+        )}
       </div>
 
       {/* Filter bar */}

@@ -63,6 +63,14 @@ export default function Home() {
   useEffect(() => {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
+      // Navigate to news tab when notification is clicked
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data?.type === 'OPEN_NEWS') handleTabClick('nyheder');
+      });
+    }
+    // Also handle ?tab=nyheder from SW openWindow
+    if (new URLSearchParams(window.location.search).get('tab') === 'nyheder') {
+      setActiveTab('nyheder');
     }
     const stored = localStorage.getItem('last-news-check');
     const val = stored ? parseInt(stored, 10) : 0;
