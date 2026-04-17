@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import dynamic from 'next/dynamic';
 
-const PortfolioChart  = dynamic(() => import('./PortfolioChart'),  { ssr: false });
+const PortfolioChart    = dynamic(() => import('./PortfolioChart'),    { ssr: false });
+const EarningsCalendar  = dynamic(() => import('./EarningsCalendar'),  { ssr: false });
 
 function fmt(amount, currency) {
   if (amount == null || isNaN(amount)) return '—';
@@ -108,6 +109,8 @@ export default function Dashboard() {
   const [paymentError, setPaymentError] = useState('');
   const [dividendForm, setDividendForm] = useState(null);
   const [dividendError, setDividendError] = useState('');
+  const [editingDividendKey, setEditingDividendKey] = useState(null); // {holdingId, index}
+  const [editDividendForm, setEditDividendForm] = useState({ date: '', amount: '' });
 
   useEffect(() => {
     const saved = localStorage.getItem('aktie-beholdninger');
@@ -300,6 +303,37 @@ export default function Dashboard() {
     );
     setDividendForm(null);
     setDividendError('');
+  };
+
+  const startEditDividend = (holdingId, index, d) => {
+    setEditingDividendKey({ holdingId, index });
+    setEditDividendForm({ date: d.date, amount: String(d.amount) });
+  };
+
+  const saveEditDividend = (e) => {
+    e.preventDefault();
+    const amount = parseFloat(editDividendForm.amount.replace(',', '.'));
+    if (!amount || amount <= 0) return;
+    const { holdingId, index } = editingDividendKey;
+    setHoldings((prev) =>
+      prev.map((h) =>
+        h.id === holdingId
+          ? { ...h, dividends: (h.dividends || []).map((d, i) => i === index ? { date: editDividendForm.date, amount } : d) }
+          : h
+      )
+    );
+    setEditingDividendKey(null);
+  };
+
+  const deleteDividend = (holdingId, index) => {
+    setHoldings((prev) =>
+      prev.map((h) =>
+        h.id === holdingId
+          ? { ...h, dividends: (h.dividends || []).filter((_, i) => i !== index) }
+          : h
+      )
+    );
+    setEditingDividendKey(null);
   };
 
   // Enrich each holding with live price data (+ DKK equivalents)
@@ -929,40 +963,77 @@ export default function Dashboard() {
                       </tr>
                       {dividendForm?.holdingId === h.id && (
                         <tr>
-                          <td colSpan={10} className="px-5 py-3 bg-indigo-50 border-b border-indigo-100">
-                            <form onSubmit={saveDividend} className="flex flex-wrap gap-2 items-end">
-                              <div className="flex flex-col gap-1">
-                                <label className="text-xs font-medium text-gray-600">Dato</label>
-                                <input
-                                  type="date"
-                                  value={dividendForm.date}
-                                  onChange={(e) => setDividendForm((f) => ({ ...f, date: e.target.value }))}
-                                  className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                                />
+                          <td colSpan={10} className="px-5 py-4 bg-indigo-50 border-b border-indigo-100">
+                            {/* Existing dividends */}
+                            {h.dividends?.length > 0 && (
+                              <div className="mb-4">
+                                <p className="text-xs font-semibold text-indigo-800 mb-2 uppercase tracking-wider">
+                                  Registrerede udbytter · {h.symbol}
+                                </p>
+                                <div className="space-y-1.5">
+                                  {[...h.dividends]
+                                    .map((d, i) => ({ ...d, origIdx: i }))
+                                    .sort((a, b) => b.date.localeCompare(a.date))
+                                    .map((d) => (
+                                      editingDividendKey?.holdingId === h.id && editingDividendKey?.index === d.origIdx ? (
+                                        <form key={d.origIdx} onSubmit={saveEditDividend} className="flex items-end gap-2 flex-wrap">
+                                          <input
+                                            type="date" value={editDividendForm.date}
+                                            onChange={(e) => setEditDividendForm((f) => ({ ...f, date: e.target.value }))}
+                                            className="px-2 py-1 text-xs border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                          />
+                                          <input
+                                            type="number" value={editDividendForm.amount} step="any" min="0" autoFocus
+                                            onChange={(e) => setEditDividendForm((f) => ({ ...f, amount: e.target.value }))}
+                                            className="w-28 px-2 py-1 text-xs border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                          />
+                                          <button type="submit" className="px-2.5 py-1 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700">Gem</button>
+                                          <button type="button" onClick={() => setEditingDividendKey(null)} className="px-2.5 py-1 text-xs text-gray-600 rounded-lg hover:bg-gray-100">Annuller</button>
+                                        </form>
+                                      ) : (
+                                        <div key={d.origIdx} className="flex items-center gap-3">
+                                          <span className="text-xs text-gray-500 w-24 tabular-nums">{d.date}</span>
+                                          <span className="text-sm font-semibold text-green-700 tabular-nums">
+                                            +{new Intl.NumberFormat('da-DK', { style: 'currency', currency: dividendForm.currency, minimumFractionDigits: 2 }).format(d.amount)}
+                                          </span>
+                                          <button onClick={() => startEditDividend(h.id, d.origIdx, d)} className="text-xs text-gray-400 hover:text-blue-600 transition-colors">Rediger</button>
+                                          <button onClick={() => deleteDividend(h.id, d.origIdx)} className="text-xs text-gray-400 hover:text-red-600 transition-colors">Slet</button>
+                                        </div>
+                                      )
+                                    ))}
+                                </div>
+                                <hr className="mt-3 mb-3 border-indigo-200" />
                               </div>
-                              <div className="flex flex-col gap-1">
-                                <label className="text-xs font-medium text-gray-600">
-                                  Udbytte modtaget ({dividendForm.currency})
-                                </label>
-                                <input
-                                  type="number"
-                                  placeholder="1250"
-                                  value={dividendForm.amount}
-                                  min="0"
-                                  step="any"
-                                  autoFocus
-                                  onChange={(e) => setDividendForm((f) => ({ ...f, amount: e.target.value }))}
-                                  className="w-32 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                                />
-                              </div>
-                              <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
-                                Gem
-                              </button>
-                              <button type="button" onClick={() => { setDividendForm(null); setDividendError(''); }} className="px-3 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
-                                Annuller
-                              </button>
-                              {dividendError && <p className="w-full text-xs text-red-600 mt-1">{dividendError}</p>}
-                            </form>
+                            )}
+                            {/* Add new */}
+                            {!editingDividendKey && (
+                              <form onSubmit={saveDividend} className="flex flex-wrap gap-2 items-end">
+                                <p className="w-full text-xs font-semibold text-indigo-800 uppercase tracking-wider mb-1">
+                                  Tilføj ny udbetaling
+                                </p>
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-xs font-medium text-gray-600">Dato</label>
+                                  <input type="date" value={dividendForm.date}
+                                    onChange={(e) => setDividendForm((f) => ({ ...f, date: e.target.value }))}
+                                    className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                                  />
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-xs font-medium text-gray-600">Udbytte modtaget ({dividendForm.currency})</label>
+                                  <input type="number" placeholder="1250" value={dividendForm.amount} min="0" step="any"
+                                    onChange={(e) => setDividendForm((f) => ({ ...f, amount: e.target.value }))}
+                                    className="w-32 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                                  />
+                                </div>
+                                <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">Tilføj</button>
+                                <button type="button" onClick={() => { setDividendForm(null); setDividendError(''); setEditingDividendKey(null); }}
+                                  className="px-3 py-1.5 text-sm text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+                                >
+                                  Luk
+                                </button>
+                                {dividendError && <p className="w-full text-xs text-red-600 mt-1">{dividendError}</p>}
+                              </form>
+                            )}
                           </td>
                         </tr>
                       )}
@@ -1008,17 +1079,52 @@ export default function Dashboard() {
                     </div>
                   </div>
                   {dividendForm?.holdingId === h.id && (
-                    <form onSubmit={saveDividend} className="flex gap-2 items-end mb-3 p-3 bg-indigo-50 rounded-lg">
-                      <div className="flex flex-col gap-1 flex-1">
-                        <label className="text-xs font-medium text-gray-600">Dato</label>
-                        <input type="date" value={dividendForm.date} onChange={(e) => setDividendForm((f) => ({ ...f, date: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
-                      </div>
-                      <div className="flex flex-col gap-1 flex-1">
-                        <label className="text-xs font-medium text-gray-600">Beløb ({dividendForm.currency})</label>
-                        <input type="number" placeholder="1250" value={dividendForm.amount} min="0" step="any" autoFocus onChange={(e) => setDividendForm((f) => ({ ...f, amount: e.target.value }))} className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white w-full" />
-                      </div>
-                      <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg">Gem</button>
-                    </form>
+                    <div className="mb-3 p-3 bg-indigo-50 rounded-lg space-y-3">
+                      {/* Existing dividends list */}
+                      {h.dividends?.length > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-indigo-800 mb-2">Registrerede udbytter</p>
+                          <div className="space-y-2">
+                            {[...h.dividends]
+                              .map((d, i) => ({ ...d, origIdx: i }))
+                              .sort((a, b) => b.date.localeCompare(a.date))
+                              .map((d) => (
+                                editingDividendKey?.holdingId === h.id && editingDividendKey?.index === d.origIdx ? (
+                                  <form key={d.origIdx} onSubmit={saveEditDividend} className="flex gap-2 items-center">
+                                    <input type="date" value={editDividendForm.date} onChange={(e) => setEditDividendForm((f) => ({ ...f, date: e.target.value }))} className="flex-1 px-2 py-1 text-xs border rounded-lg bg-white" />
+                                    <input type="number" value={editDividendForm.amount} step="any" min="0" onChange={(e) => setEditDividendForm((f) => ({ ...f, amount: e.target.value }))} className="w-20 px-2 py-1 text-xs border rounded-lg bg-white" />
+                                    <button type="submit" className="px-2 py-1 bg-indigo-600 text-white text-xs rounded-lg">Gem</button>
+                                    <button type="button" onClick={() => setEditingDividendKey(null)} className="px-2 py-1 text-xs text-gray-600 rounded-lg">✕</button>
+                                  </form>
+                                ) : (
+                                  <div key={d.origIdx} className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-500 w-20 tabular-nums">{d.date}</span>
+                                    <span className="text-xs font-semibold text-green-700 flex-1">+{d.amount.toLocaleString('da-DK')} {dividendForm.currency}</span>
+                                    <button onClick={() => startEditDividend(h.id, d.origIdx, d)} className="text-xs text-blue-500">Rediger</button>
+                                    <button onClick={() => deleteDividend(h.id, d.origIdx)} className="text-xs text-red-500">Slet</button>
+                                  </div>
+                                )
+                              ))}
+                          </div>
+                          <hr className="mt-2 border-indigo-200" />
+                        </div>
+                      )}
+                      {/* Add form */}
+                      {!editingDividendKey && (
+                        <form onSubmit={saveDividend} className="flex gap-2 items-end">
+                          <div className="flex flex-col gap-1 flex-1">
+                            <label className="text-xs font-medium text-gray-600">Dato</label>
+                            <input type="date" value={dividendForm.date} onChange={(e) => setDividendForm((f) => ({ ...f, date: e.target.value }))} className="px-2 py-1.5 text-xs border border-gray-300 rounded-lg bg-white w-full" />
+                          </div>
+                          <div className="flex flex-col gap-1 flex-1">
+                            <label className="text-xs font-medium text-gray-600">Beløb ({dividendForm.currency})</label>
+                            <input type="number" placeholder="1250" value={dividendForm.amount} min="0" step="any" onChange={(e) => setDividendForm((f) => ({ ...f, amount: e.target.value }))} className="px-2 py-1.5 text-xs border border-gray-300 rounded-lg bg-white w-full" />
+                          </div>
+                          <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg">Tilføj</button>
+                          <button type="button" onClick={() => { setDividendForm(null); setEditingDividendKey(null); }} className="px-2 py-1.5 text-xs text-gray-600 rounded-lg">Luk</button>
+                        </form>
+                      )}
+                    </div>
                   )}
                   <div className="grid grid-cols-2 gap-y-2 text-sm">
                     <span className="text-gray-500">Antal</span>
@@ -1243,6 +1349,9 @@ export default function Dashboard() {
           )}
         </div>
       )}
+
+      {/* Earnings calendar */}
+      <EarningsCalendar holdings={holdings || []} />
 
       {/* Footer note */}
       {Object.keys(summary).length > 0 && (
