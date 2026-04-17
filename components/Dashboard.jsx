@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 
-const PortfolioChart = dynamic(() => import('./PortfolioChart'), { ssr: false });
+const PortfolioChart  = dynamic(() => import('./PortfolioChart'),  { ssr: false });
+const BenchmarkChart  = dynamic(() => import('./BenchmarkChart'),  { ssr: false });
 
 function fmt(amount, currency) {
   if (amount == null || isNaN(amount)) return '—';
@@ -91,6 +92,7 @@ export default function Dashboard() {
   const [priceError, setPriceError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [assetFilter, setAssetFilter] = useState('all'); // 'all' | 'stock' | 'crypto'
+  const [sortBy, setSortBy] = useState('default'); // 'default' | 'alpha' | 'gain'
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
@@ -330,12 +332,18 @@ export default function Dashboard() {
     });
 
   // Filter by asset type — crowdlending is always excluded from the stock/crypto table
-  const filteredEnriched = enriched.filter((h) => {
-    if (h.type === 'crowdlending') return false;
-    if (assetFilter === 'crypto') return h.type === 'crypto';
-    if (assetFilter === 'stock') return h.type === 'stock' || !h.type;
-    return true; // 'all'
-  });
+  const filteredEnriched = enriched
+    .filter((h) => {
+      if (h.type === 'crowdlending') return false;
+      if (assetFilter === 'crypto') return h.type === 'crypto';
+      if (assetFilter === 'stock') return h.type === 'stock' || !h.type;
+      return true; // 'all'
+    })
+    .sort((a, b) => {
+      if (sortBy === 'alpha') return a.symbol.localeCompare(b.symbol);
+      if (sortBy === 'gain')  return (b.gainLossPct ?? -Infinity) - (a.gainLossPct ?? -Infinity);
+      return 0;
+    });
   const filteredCrowdlending = assetFilter === 'crowdlending' || assetFilter === 'all'
     ? crowdlendingRows
     : [];
@@ -435,6 +443,9 @@ export default function Dashboard() {
       {/* Portfolio chart */}
       <PortfolioChart holdings={holdings || []} rates={dkkRates} />
 
+      {/* Benchmark comparison chart */}
+      <BenchmarkChart holdings={holdings || []} rates={dkkRates} />
+
       {/* Holdings card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {/* Card header */}
@@ -490,27 +501,51 @@ export default function Dashboard() {
             </button>
           </div>
           </div>{/* end row 1 */}
-          {/* Row 2: filter tabs */}
+          {/* Row 2: filter tabs + sort */}
           {holdings?.length > 0 && (
-            <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 mt-2 w-fit">
-              {[
-                { label: 'Alle', value: 'all' },
-                { label: 'Aktier', value: 'stock' },
-                { label: 'Krypto', value: 'crypto' },
-                { label: 'Crowdlending', value: 'crowdlending' },
-              ].map((tab) => (
-                <button
-                  key={tab.value}
-                  onClick={() => setAssetFilter(tab.value)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
-                    assetFilter === tab.value
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                {[
+                  { label: 'Alle', value: 'all' },
+                  { label: 'Aktier', value: 'stock' },
+                  { label: 'Krypto', value: 'crypto' },
+                  { label: 'Crowdlending', value: 'crowdlending' },
+                ].map((tab) => (
+                  <button
+                    key={tab.value}
+                    onClick={() => setAssetFilter(tab.value)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      assetFilter === tab.value
+                        ? 'bg-white text-gray-900 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1 ml-auto">
+                <span className="text-xs text-gray-400">Sorter:</span>
+                <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                  {[
+                    { label: 'Standard', value: 'default' },
+                    { label: 'A–Z',      value: 'alpha'   },
+                    { label: '% afkast', value: 'gain'    },
+                  ].map((s) => (
+                    <button
+                      key={s.value}
+                      onClick={() => setSortBy(s.value)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                        sortBy === s.value
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
