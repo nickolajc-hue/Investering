@@ -7,7 +7,6 @@ const Dashboard        = dynamic(() => import('@/components/Dashboard'),        
 const NewsFeed         = dynamic(() => import('@/components/NewsFeed'),         { ssr: false });
 const AllocationView   = dynamic(() => import('@/components/AllocationView'),   { ssr: false });
 const EarningsCalendar = dynamic(() => import('@/components/EarningsCalendar'), { ssr: false });
-const StockScreener    = dynamic(() => import('@/components/StockScreener'),    { ssr: false });
 
 function InstallHint() {
   const [show, setShow] = useState(false);
@@ -109,7 +108,6 @@ export default function Home() {
               { id: 'allokering', label: 'Allokering' },
               { id: 'nyheder',    label: 'Nyheder',   badge: showNewsBadge },
               { id: 'kalender',   label: 'Kalender' },
-              { id: 'screener',   label: 'Screener' },
             ].map(({ id, label, badge }) => (
               <button
                 key={id}
@@ -136,7 +134,6 @@ export default function Home() {
       {activeTab === 'allokering' && <AllocationView />}
       {activeTab === 'nyheder'    && <NewsFeed lastNewsCheck={prevNewsCheck} />}
       {activeTab === 'kalender'   && <EarningsCalendar />}
-      {activeTab === 'screener'   && <StockScreener />}
 
       <InstallHint />
     </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -103,6 +103,7 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal]         = useState(strategy.name);
   const [showAddBucket, setShowAddBucket] = useState(false);
+  const [expandedBucket, setExpandedBucket] = useState(null);
   const [bucketForm, setBucketForm] = useState({
     name: '', target: '', color: '', tags: [],
   });
@@ -112,6 +113,7 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
   // Only assigned holdings count toward totalDKK so percentages reflect the strategy.
   let totalDKK = 0;
   const bucketValues = {};
+  const bucketHoldingsList = {}; // bucket id → [{holding, value}]
   const assignedIds = new Set();
   for (const h of allHoldings) {
     const v = holdingDKK(h, prices, rates);
@@ -120,8 +122,10 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
     for (const b of strategy.buckets) {
       if (b.tags.some((t) => tags.includes(t))) {
         bucketValues[b.id] = (bucketValues[b.id] ?? 0) + v;
+        if (!bucketHoldingsList[b.id]) bucketHoldingsList[b.id] = [];
+        bucketHoldingsList[b.id].push({ holding: h, value: v });
         assignedIds.add(h.id);
-        totalDKK += v; // only count holdings that match a bucket
+        totalDKK += v;
         break;
       }
     }
@@ -255,55 +259,112 @@ function StrategyCard({ strategy, allHoldings, prices, rates, customSectors = []
                 <th className="w-24 pb-2" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
-              {buckets.map((b) => (
-                <tr key={b.id} className="group">
-                  <td className="py-2.5 pr-3">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={b.color}
-                        onChange={(e) => updateBucket({ ...b, color: e.target.value })}
-                        className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent"
-                        title="Vælg farve"
-                      />
-                      <span className="font-medium text-gray-900">{b.name}</span>
-                    </div>
-                    <div className="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden w-full">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(b.currentPct, 100)}%`, backgroundColor: b.color }}
-                      />
-                    </div>
-                  </td>
-                  <td className="py-2.5 text-right">
-                    <input
-                      type="number"
-                      value={b.target}
-                      min="0"
-                      max="100"
-                      step="1"
-                      onChange={(e) => updateBucket({ ...b, target: parseFloat(e.target.value) || 0 })}
-                      className="w-14 text-right text-sm border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    />
-                    <span className="text-gray-400 ml-0.5 text-xs">%</span>
-                  </td>
-                  <td className={`py-2.5 text-right tabular-nums font-semibold ${b.currentPct > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
-                    {b.currentPct.toFixed(1).replace('.', ',')}%
-                  </td>
-                  <td className="py-2.5 text-right">
-                    <DiffBadge diff={b.diff} diffDKK={b.diffDKK} />
-                  </td>
-                  <td className="py-2.5 text-right">
-                    <button
-                      onClick={() => removeBucket(b.id)}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 transition-all text-xs"
-                    >
-                      Fjern
-                    </button>
-                  </td>
-                </tr>
-              ))}
+            <tbody>
+              {buckets.map((b) => {
+                const isOpen = expandedBucket === b.id;
+                const hlist = (bucketHoldingsList[b.id] ?? []).slice().sort((a, z) => z.value - a.value);
+                return (
+                  <Fragment key={b.id}>
+                    <tr className="group border-t border-gray-50 first:border-t-0">
+                      <td className="py-2.5 pr-3">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={b.color}
+                            onChange={(e) => updateBucket({ ...b, color: e.target.value })}
+                            className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent"
+                            title="Vælg farve"
+                          />
+                          <button
+                            onClick={() => setExpandedBucket(isOpen ? null : b.id)}
+                            className="font-medium text-gray-900 hover:text-blue-600 transition-colors flex items-center gap-1 text-left"
+                          >
+                            {b.name}
+                            {hlist.length > 0 && (
+                              <span className={`text-gray-400 text-[10px] transition-transform ${isOpen ? 'rotate-180' : ''}`}>▾</span>
+                            )}
+                          </button>
+                          {hlist.length > 0 && (
+                            <span className="text-[10px] text-gray-400">{hlist.length}</span>
+                          )}
+                        </div>
+                        <div className="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden w-full">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{ width: `${Math.min(b.currentPct, 100)}%`, backgroundColor: b.color }}
+                          />
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <input
+                          type="number"
+                          value={b.target}
+                          min="0"
+                          max="100"
+                          step="1"
+                          onChange={(e) => updateBucket({ ...b, target: parseFloat(e.target.value) || 0 })}
+                          className="w-14 text-right text-sm border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                        <span className="text-gray-400 ml-0.5 text-xs">%</span>
+                      </td>
+                      <td className={`py-2.5 text-right tabular-nums font-semibold ${b.currentPct > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
+                        {b.currentPct.toFixed(1).replace('.', ',')}%
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <DiffBadge diff={b.diff} diffDKK={b.diffDKK} />
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <button
+                          onClick={() => removeBucket(b.id)}
+                          className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 transition-all text-xs"
+                        >
+                          Fjern
+                        </button>
+                      </td>
+                    </tr>
+                    {isOpen && hlist.length > 0 && (
+                      <tr>
+                        <td colSpan={5} className="pb-3 pt-0">
+                          <div className="ml-6 bg-gray-50 rounded-lg overflow-hidden border border-gray-100">
+                            {hlist.map(({ holding: h, value: v }) => {
+                              const pctOfBucket  = b.value > 0 ? (v / b.value)   * 100 : 0;
+                              const pctOfPortfolio = totalDKK > 0 ? (v / totalDKK) * 100 : 0;
+                              const displayName = h.type === 'crowdlending'
+                                ? (h.name || h.symbol || '–')
+                                : (h.symbol || h.name || '–');
+                              return (
+                                <div key={h.id} className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 last:border-b-0 hover:bg-gray-100 transition-colors">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                      style={{ backgroundColor: b.color }}
+                                    />
+                                    <span className="text-xs font-semibold text-gray-800 truncate">{displayName}</span>
+                                    {h.name && h.symbol && h.type !== 'crowdlending' && (
+                                      <span className="text-[10px] text-gray-400 truncate hidden sm:block">{h.name}</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-4 flex-shrink-0 ml-2">
+                                    <span className="text-xs tabular-nums text-gray-500 hidden sm:block">
+                                      {Math.round(v).toLocaleString('da-DK')} kr.
+                                    </span>
+                                    <span className="text-xs tabular-nums text-gray-400 w-12 text-right">
+                                      {pctOfBucket.toFixed(1).replace('.', ',')}%
+                                    </span>
+                                    <span className="text-[10px] tabular-nums text-gray-300 w-12 text-right hidden sm:block">
+                                      {pctOfPortfolio.toFixed(1).replace('.', ',')}% af pf.
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
 
