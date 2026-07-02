@@ -96,7 +96,7 @@ export default function Dashboard() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
     type: 'stock',
-    symbol: '', shares: '', avgBuyPrice: '',
+    symbol: '', shares: '', avgBuyPrice: '', manualPrice: '',
     sectors: [], annualDividend: '',
     buyDate: '', sellDate: '',
     name: '', invested: '', currency: 'DKK', startDate: '',
@@ -146,7 +146,7 @@ export default function Dashboard() {
       setPrices({});
       return;
     }
-    const symbols = [...new Set(list.filter((h) => h.symbol).map((h) => h.symbol))];
+    const symbols = [...new Set(list.filter((h) => h.symbol && h.type !== 'manual').map((h) => h.symbol))];
     setLoading(true);
     setPriceError(null);
     try {
@@ -184,7 +184,31 @@ export default function Dashboard() {
   const saveHolding = (e) => {
     e.preventDefault();
 
-    if (form.type === 'crowdlending') {
+    if (form.type === 'manual') {
+      const name = form.name.trim();
+      const shares = parseFloat(form.shares.replace(',', '.'));
+      const avgBuyPrice = parseFloat(form.avgBuyPrice.replace(',', '.'));
+      const manualPrice = parseFloat(form.manualPrice.replace(',', '.'));
+      if (!name) return setFormError('Angiv et navn');
+      if (!shares || shares <= 0) return setFormError('Antal skal være større end 0');
+      if (!avgBuyPrice || avgBuyPrice <= 0) return setFormError('Gns. købspris skal være større end 0');
+      if (!manualPrice || manualPrice <= 0) return setFormError('Aktuel kurs skal være større end 0');
+      const autoSymbol = form.symbol.trim().toUpperCase() || name.slice(0, 8).toUpperCase().replace(/\s+/g, '-');
+      const annualDividend = parseFloat(form.annualDividend.replace(',', '.')) || 0;
+      const patch = {
+        type: 'manual', name, symbol: autoSymbol, shares, avgBuyPrice, manualPrice,
+        currency: form.currency,
+        sectors: form.sectors.length ? form.sectors : undefined,
+        annualDividend: annualDividend > 0 ? annualDividend : undefined,
+        buyDate: form.buyDate || undefined,
+        sellDate: form.sellDate || undefined,
+      };
+      if (editingId) {
+        setHoldings((prev) => prev.map((h) => h.id === editingId ? { ...h, ...patch } : h));
+      } else {
+        setHoldings((prev) => [...prev, { id: `manual-${Date.now()}`, ...patch, dividends: [] }]);
+      }
+    } else if (form.type === 'crowdlending') {
       const name = form.name.trim();
       const invested = parseFloat(form.invested.replace(',', '.'));
       if (!name) return setFormError('Angiv et platformsnavn');
@@ -224,7 +248,7 @@ export default function Dashboard() {
     setEditingId(null);
     setForm((f) => ({
       type: f.type,
-      symbol: '', shares: '', avgBuyPrice: '', sectors: [], annualDividend: '',
+      symbol: '', shares: '', avgBuyPrice: '', manualPrice: '', sectors: [], annualDividend: '',
       buyDate: '', sellDate: '',
       name: '', invested: '', currency: 'DKK', startDate: '',
     }));
@@ -239,11 +263,27 @@ export default function Dashboard() {
     if (h.type === 'crowdlending') {
       setForm({
         type: 'crowdlending',
-        symbol: '', shares: '', avgBuyPrice: '', sectors: [], annualDividend: '',
+        symbol: '', shares: '', avgBuyPrice: '', manualPrice: '', sectors: [], annualDividend: '',
         name: h.name || '',
         invested: String(h.invested ?? ''),
         currency: h.currency || 'DKK',
         startDate: h.startDate || '',
+        buyDate: '', sellDate: '',
+      });
+    } else if (h.type === 'manual') {
+      setForm({
+        type: 'manual',
+        name: h.name || '',
+        symbol: h.symbol || '',
+        shares: String(h.shares ?? ''),
+        avgBuyPrice: String(h.avgBuyPrice ?? ''),
+        manualPrice: String(h.manualPrice ?? ''),
+        currency: h.currency || 'DKK',
+        sectors: h.sectors || [],
+        annualDividend: String(h.annualDividend ?? ''),
+        buyDate: h.buyDate || '',
+        sellDate: h.sellDate || '',
+        invested: '', startDate: '',
       });
     } else {
       setForm({
@@ -251,6 +291,7 @@ export default function Dashboard() {
         symbol: h.symbol || '',
         shares: String(h.shares ?? ''),
         avgBuyPrice: String(h.avgBuyPrice ?? ''),
+        manualPrice: '',
         sectors: h.sectors || (h.sector ? [h.sector] : []),
         annualDividend: String(h.annualDividend ?? ''),
         buyDate: h.buyDate || '',
@@ -372,6 +413,33 @@ export default function Dashboard() {
   const enriched = (holdings || []).filter(h => h.type !== 'crowdlending').map((h) => {
     // Normalise sectors: old data may have a single `sector` string
     h = { ...h, sectors: h.sectors ?? (h.sector ? [h.sector] : []) };
+
+    // Manual holdings use manualPrice instead of live API price
+    if (h.type === 'manual') {
+      const currentPrice = h.manualPrice ?? h.avgBuyPrice;
+      const currency = h.currency || 'DKK';
+      const rate = dkkRates[currency] ?? 1;
+      const currentValue = h.shares * currentPrice;
+      const invested = h.shares * h.avgBuyPrice;
+      const gainLoss = currentValue - invested;
+      const gainLossPct = invested > 0 ? (gainLoss / invested) * 100 : null;
+      const isSold = !!(h.sellDate && new Date(h.sellDate) < new Date());
+      const totalDividendsReceived = (h.dividends || []).reduce((s, d) => s + d.amount, 0);
+      return {
+        ...h,
+        currentPrice, currency, currentValue, invested, gainLoss, gainLossPct,
+        dayChangePct: null,
+        isSold, dkkRate: rate,
+        currentValueDKK: currentValue * rate,
+        investedDKK: invested * rate,
+        gainLossDKK: gainLoss * rate,
+        dividendYield: h.annualDividend && currentPrice ? (h.annualDividend / currentPrice) * 100 : null,
+        annualDividendDKK: h.annualDividend ? h.annualDividend * h.shares * rate : 0,
+        totalDividendsReceived,
+        totalDividendsDKK: totalDividendsReceived * rate,
+      };
+    }
+
     const p = prices[h.symbol];
     const currentPrice = p?.price ?? null;
     const currency = p?.currency || 'USD';
@@ -678,6 +746,7 @@ export default function Dashboard() {
                     { label: 'Aktie', value: 'stock' },
                     { label: 'Krypto', value: 'crypto' },
                     { label: 'Crowdlending', value: 'crowdlending' },
+                    { label: 'Manuel / Fond', value: 'manual' },
                   ].map((t) => (
                     <button
                       key={t.value}
@@ -694,7 +763,104 @@ export default function Dashboard() {
                   ))}
                 </div>
               </div>
-              {form.type === 'crowdlending' ? (
+              {form.type === 'manual' ? (
+                <>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Navn</label>
+                    <input
+                      type="text"
+                      placeholder="Nordea Globale Aktier"
+                      value={form.name}
+                      onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                      maxLength={50}
+                      className="w-48 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Kort id (valgfri)</label>
+                    <input
+                      type="text"
+                      placeholder="NORD-GLB"
+                      value={form.symbol}
+                      onChange={(e) => setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))}
+                      maxLength={15}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Antal enheder</label>
+                    <input
+                      type="number" placeholder="100" value={form.shares} min="0" step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, shares: e.target.value }))}
+                      className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Gns. købspris</label>
+                    <input
+                      type="number" placeholder="150.00" value={form.avgBuyPrice} min="0" step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, avgBuyPrice: e.target.value }))}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Aktuel kurs</label>
+                    <input
+                      type="number" placeholder="165.00" value={form.manualPrice} min="0" step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, manualPrice: e.target.value }))}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Valuta</label>
+                    <select
+                      value={form.currency}
+                      onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}
+                      className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    >
+                      {['DKK', 'EUR', 'USD', 'GBP', 'SEK', 'NOK'].map((c) => (
+                        <option key={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1 w-full">
+                    <label className="text-xs font-medium text-gray-600">Sektorer (valgfri)</label>
+                    <SectorPicker
+                      selected={form.sectors}
+                      onToggle={(s) => setForm((f) => ({
+                        ...f,
+                        sectors: f.sectors.includes(s) ? f.sectors.filter(x => x !== s) : [...f.sectors, s],
+                      }))}
+                      customSectors={customSectors}
+                      onAddCustom={addCustomSector}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Udbytte/enhed (år, valgfri)</label>
+                    <input
+                      type="number" placeholder="2.50" value={form.annualDividend} min="0" step="any"
+                      onChange={(e) => setForm((f) => ({ ...f, annualDividend: e.target.value }))}
+                      className="w-28 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Købsdato (valgfri)</label>
+                    <input
+                      type="date" value={form.buyDate}
+                      onChange={(e) => setForm((f) => ({ ...f, buyDate: e.target.value }))}
+                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-600">Salgsdato (valgfri)</label>
+                    <input
+                      type="date" value={form.sellDate}
+                      onChange={(e) => setForm((f) => ({ ...f, sellDate: e.target.value }))}
+                      className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                </>
+              ) : form.type === 'crowdlending' ? (
                 <>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs font-medium text-gray-600">Platform</label>
@@ -848,6 +1014,8 @@ export default function Dashboard() {
                 ? 'Tilføj renteudbetalinger direkte på platformen efterfølgende'
                 : form.type === 'crypto'
                 ? 'Krypto eksempel: BTC-USD · ETH-USD · SOL-USD'
+                : form.type === 'manual'
+                ? 'Manuel beholdning: opdater "Aktuel kurs" manuelt ved at trykke Rediger'
                 : 'Aktie eksempel: AAPL · NOVO-B.CO · TSLA'}
             </p>
           </form>
@@ -917,8 +1085,18 @@ export default function Dashboard() {
                       <tr className={`hover:bg-gray-50 group transition-colors ${h.isSold ? 'opacity-60' : ''}`}>
                         <td className="px-5 py-3.5">
                           <div className="font-bold text-gray-900">{h.symbol}</div>
-                          <div className="text-xs text-gray-400 max-w-[160px] truncate">{h.name}</div>
+                          {h.type === 'manual' && h.name !== h.symbol && (
+                            <div className="text-xs text-gray-500 max-w-[160px] truncate">{h.name}</div>
+                          )}
+                          {h.type !== 'manual' && (
+                            <div className="text-xs text-gray-400 max-w-[160px] truncate">{h.name}</div>
+                          )}
                           <div className="flex flex-wrap gap-0.5 mt-0.5">
+                            {h.type === 'manual' && (
+                              <span className="px-1.5 py-0 rounded text-[10px] font-semibold bg-purple-100 text-purple-600">
+                                MANUEL
+                              </span>
+                            )}
                             {h.isSold && (
                               <span className="px-1.5 py-0 rounded text-[10px] font-semibold bg-red-100 text-red-600">
                                 SOLGT {h.sellDate}
@@ -1082,12 +1260,18 @@ export default function Dashboard() {
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <span className="font-bold text-base text-gray-900">{h.symbol}</span>
+                      {h.type === 'manual' && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-100 text-purple-600">MANUEL</span>
+                      )}
                       {h.isSold && (
                         <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-600">
                           SOLGT {h.sellDate}
                         </span>
                       )}
-                      <span className="text-xs text-gray-400 ml-2 align-middle">{h.name}</span>
+                      {h.type === 'manual' && h.name !== h.symbol
+                        ? <span className="text-xs text-gray-500 ml-2 align-middle">{h.name}</span>
+                        : h.type !== 'manual' && <span className="text-xs text-gray-400 ml-2 align-middle">{h.name}</span>
+                      }
                     </div>
                     <div className="flex items-center gap-1">
                       {!h.isSold && (

@@ -49,8 +49,9 @@ export default function PortfolioChart({ holdings, rates }) {
   const [loading,         setLoading]         = useState(false);
   const [error,           setError]           = useState(null);
 
-  const tradable    = (holdings || []).filter((h) => h.type === 'stock' || h.type === 'crypto' || !h.type);
+  const tradable     = (holdings || []).filter((h) => h.type === 'stock' || h.type === 'crypto' || !h.type);
   const crowdlending = (holdings || []).filter((h) => h.type === 'crowdlending');
+  const manual       = (holdings || []).filter((h) => h.type === 'manual');
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const loadChart = useCallback(async (p) => {
@@ -95,16 +96,23 @@ export default function PortfolioChart({ holdings, rates }) {
     [assetFilter, JSON.stringify(crowdlending)]
   );
 
+  // Manual holdings always included (they have no API history to filter on)
+  const filteredManual = useMemo(
+    () => assetFilter === 'all' || assetFilter === 'stock' ? manual : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assetFilter, JSON.stringify(manual)]
+  );
+
   const rawChartData = useMemo(
-    () => buildChartData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {}),
-    [fetchedHistory, filteredTradable, filteredCrowdlending, rates]
+    () => buildChartData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {}, filteredManual),
+    [fetchedHistory, filteredTradable, filteredCrowdlending, rates, filteredManual]
   );
 
   // Comparison data — only when benchmark is active and history was fetched
   const compData = useMemo(() => {
     if (!benchmarkSymbol || !fetchedHistory[benchmarkSymbol]) return null;
-    return buildComparisonData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {}, benchmarkSymbol);
-  }, [fetchedHistory, benchmarkSymbol, filteredTradable, filteredCrowdlending, rates]);
+    return buildComparisonData(fetchedHistory, filteredTradable, filteredCrowdlending, rates || {}, benchmarkSymbol, filteredManual);
+  }, [fetchedHistory, benchmarkSymbol, filteredTradable, filteredCrowdlending, rates, filteredManual]);
 
   // Normalise to % for standalone view
   const displayData = useMemo(() => {

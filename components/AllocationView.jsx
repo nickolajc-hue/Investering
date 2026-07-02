@@ -47,8 +47,13 @@ function holdingDKK(h, prices, rates) {
     const interest = (h.payments || []).reduce((s, p) => s + p.amount, 0);
     return (h.invested + interest) * (rates[h.currency] ?? 1);
   }
+  if (h.type === 'manual') {
+    const price = h.manualPrice ?? h.avgBuyPrice;
+    if (price == null) return null;
+    return h.shares * price * (rates[h.currency || 'DKK'] ?? 1);
+  }
   const p = prices[h.symbol];
-  if (!p || p.price == null) return null; // unknown — excluded from %
+  if (!p || p.price == null) return null;
   const rate = rates[p.currency] ?? rates['USD'] ?? 6.9;
   return h.shares * p.price * rate;
 }
